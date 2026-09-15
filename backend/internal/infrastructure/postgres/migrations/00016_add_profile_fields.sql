@@ -1,0 +1,14 @@
+-- +goose Up
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(80);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique
+    ON users (username)
+    WHERE username IS NOT NULL;
+
+-- +goose Down
+DROP INDEX IF EXISTS idx_users_username_unique;
+ALTER TABLE users DROP COLUMN IF EXISTS avatar_url;
+ALTER TABLE users DROP COLUMN IF EXISTS bio;
+ALTER TABLE users DROP COLUMN IF EXISTS username;
