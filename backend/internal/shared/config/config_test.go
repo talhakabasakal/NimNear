@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -23,6 +24,9 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 6379, cfg.Redis.Port)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
+	assert.Equal(t, 30*time.Second, cfg.Payments.ReconciliationInterval)
+	assert.Equal(t, time.Hour, cfg.Payments.ReconciliationDeadline)
+	assert.Equal(t, 50, cfg.Payments.ReconciliationBatchSize)
 }
 
 func TestLoad_EnvironmentOverrides(t *testing.T) {
@@ -197,4 +201,19 @@ func TestPaymentConfigValidateForEnvironment_RejectsLocalRPCInProduction(t *test
 	err := cfg.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "NIMNEAR_NIMIQ_RPC_URL")
+}
+
+func TestPaymentConfigValidate_RejectsNegativeReconciliationSettings(t *testing.T) {
+	cfg := PaymentConfig{
+		HoldDuration:            time.Minute,
+		ReconciliationInterval:  -time.Second,
+		ReconciliationDeadline:  time.Hour,
+		ReconciliationBatchSize: 10,
+		NimiqNetwork:            "TestAlbatross",
+		MerchantAddress:         "NQ07 0000 0000 0000 0000 0000 0000 0000 0000",
+		NimiqRPCURL:             "https://rpc.testnet.example",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative reconciliation interval to be rejected")
+	}
 }

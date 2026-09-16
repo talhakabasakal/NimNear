@@ -77,7 +77,7 @@ Loading: route-level detail skeleton plus component-level participation and purc
 
 Empty/not found: an event API 404 maps to the route not-found screen.
 
-Error: event API failures render `Etkinlik yüklenemedi`. Organizer API failure is shown independently as `Organizatör bilgisi yüklenemedi`; it is not silently replaced with a person. Participation, purchase restore, and event-creation auth checks distinguish a 401 from service failure. Non-auth failures render retryable errors and do not expose anonymous, ready-to-buy, or other fabricated states. Purchase polling retains the last backend purchase state and displays polling errors while retrying.
+Error: event API failures render `Etkinlik yüklenemedi`. Organizer API failure is shown independently as `Organizatör bilgisi yüklenemedi`; it is not silently replaced with a person. Participation, purchase restore, and event-creation auth checks distinguish a 401 from service failure. Non-auth failures render retryable errors and do not expose anonymous, ready-to-buy, or other fabricated states. Purchase polling retains the last backend purchase state and displays polling errors while retrying. The backend reconciliation worker may move submitted/verifying purchases to confirmed, failed, or expired from authoritative verification; no frontend fallback creates a payment result.
 
 Dependency: protected participation and purchase actions still depend on a legacy backend JWT. Native Nimiq account permission does not create that JWT; the verified Nimiq authentication bridge remains externally blocked.
 

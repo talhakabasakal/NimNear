@@ -13,12 +13,15 @@ import (
 )
 
 type fakePurchaseRepository struct {
-	purchase *model.Purchase
-	err      error
-	gotEvent uuid.UUID
-	gotUser  uuid.UUID
-	gotNow   time.Time
-	gotHold  time.Duration
+	purchase     *model.Purchase
+	err          error
+	gotEvent     uuid.UUID
+	gotUser      uuid.UUID
+	gotNow       time.Time
+	gotHold      time.Duration
+	candidates   []*model.Purchase
+	gotListLimit int
+	claimCalls   int
 }
 
 func (f *fakePurchaseRepository) Create(_ context.Context, eventID, userID uuid.UUID, now time.Time, hold time.Duration) (*model.Purchase, error) {
@@ -34,20 +37,83 @@ func (f *fakePurchaseRepository) GetActiveForEvent(_ context.Context, _, _ uuid.
 	return f.purchase, f.err
 }
 
-func (f *fakePurchaseRepository) SubmitTransaction(_ context.Context, _, _ uuid.UUID, hash string, _ time.Time) (*model.Purchase, error) {
+func (f *fakePurchaseRepository) SubmitTransaction(_ context.Context, _, _ uuid.UUID, hash string, _ time.Time, deadline time.Time) (*model.Purchase, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	if f.purchase != nil {
 		f.purchase.TransactionHash = &hash
 		f.purchase.Status = model.StatusSubmitted
+		f.purchase.ReconciliationDeadlineAt = &deadline
 	}
 	return f.purchase, nil
 }
 
-func (f *fakePurchaseRepository) SetVerificationState(_ context.Context, _, _ uuid.UUID, status model.Status, _ time.Time) (*model.Purchase, error) {
+func (f *fakePurchaseRepository) ClaimVerification(_ context.Context, purchaseID, _ uuid.UUID, _ time.Time, _, _ time.Duration, _ bool) (*model.Purchase, error) {
+	f.claimCalls++
 	if f.err != nil {
 		return nil, f.err
+	}
+	if len(f.candidates) > 0 {
+		for _, candidate := range f.candidates {
+			if candidate != nil && candidate.ID == purchaseID {
+				return candidate, nil
+			}
+		}
+		return nil, nil
+	}
+	if f.purchase == nil || (f.purchase.Status != model.StatusSubmitted && f.purchase.Status != model.StatusVerifying) {
+		return nil, nil
+	}
+	return f.purchase, nil
+}
+
+func (f *fakePurchaseRepository) ListReconciliationCandidates(_ context.Context, _ time.Time, _, _ time.Duration, limit int) ([]*model.Purchase, error) {
+	f.gotListLimit = limit
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.candidates) > 0 {
+		if len(f.candidates) > limit {
+			return f.candidates[:limit], nil
+		}
+		return f.candidates, nil
+	}
+	if f.purchase == nil {
+		return nil, nil
+	}
+	return []*model.Purchase{f.purchase}, nil
+}
+
+func (f *fakePurchaseRepository) ExpireUnresolved(_ context.Context, purchaseID, _ uuid.UUID, _ time.Time, _ time.Duration) (*model.Purchase, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.candidates) > 0 {
+		for _, candidate := range f.candidates {
+			if candidate != nil && candidate.ID == purchaseID {
+				candidate.Status = model.StatusExpired
+				return candidate, nil
+			}
+		}
+	}
+	if f.purchase != nil {
+		f.purchase.Status = model.StatusExpired
+	}
+	return f.purchase, nil
+}
+
+func (f *fakePurchaseRepository) SetVerificationState(_ context.Context, purchaseID, _ uuid.UUID, status model.Status, _ time.Time) (*model.Purchase, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.candidates) > 0 {
+		for _, candidate := range f.candidates {
+			if candidate != nil && candidate.ID == purchaseID {
+				candidate.Status = status
+				return candidate, nil
+			}
+		}
 	}
 	if f.purchase != nil {
 		f.purchase.Status = status

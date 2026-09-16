@@ -189,10 +189,13 @@ type KafkaConfig struct {
 
 // PaymentConfig contains public payment verification settings. No secret or private key is accepted.
 type PaymentConfig struct {
-	HoldDuration    time.Duration
-	NimiqNetwork    string
-	MerchantAddress string
-	NimiqRPCURL     string
+	HoldDuration            time.Duration
+	ReconciliationInterval  time.Duration
+	ReconciliationDeadline  time.Duration
+	ReconciliationBatchSize int
+	NimiqNetwork            string
+	MerchantAddress         string
+	NimiqRPCURL             string
 }
 
 // Enabled reports whether all public Nimiq verification settings are present.
@@ -208,6 +211,18 @@ func (p PaymentConfig) Validate() error {
 		strings.TrimSpace(p.MerchantAddress) == "" &&
 		strings.TrimSpace(p.NimiqRPCURL) == "" {
 		return nil
+	}
+	if p.HoldDuration < 0 || p.ReconciliationInterval < 0 || p.ReconciliationDeadline < 0 || p.ReconciliationBatchSize < 0 {
+		return fmt.Errorf("payment timing and batch settings must not be negative")
+	}
+	if p.ReconciliationInterval > 0 && p.ReconciliationInterval < 5*time.Second {
+		return fmt.Errorf("NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS must be at least 5 seconds")
+	}
+	if p.ReconciliationInterval > 0 && p.ReconciliationDeadline > 0 && p.ReconciliationDeadline <= p.ReconciliationInterval {
+		return fmt.Errorf("NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES must exceed the reconciliation interval")
+	}
+	if p.ReconciliationBatchSize > 1000 {
+		return fmt.Errorf("NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE must not exceed 1000")
 	}
 	if !p.Enabled() {
 		return fmt.Errorf("NIMNEAR_NIMIQ_NETWORK, NIMNEAR_MERCHANT_ADDRESS, and NIMNEAR_NIMIQ_RPC_URL must be set together")
@@ -354,10 +369,13 @@ func Load() *Config {
 			WriteBufferSize: envOrDefaultInt("WS_WRITE_BUFFER_SIZE", 1024),
 		},
 		Payments: PaymentConfig{
-			HoldDuration:    time.Duration(envOrDefaultInt("NIMNEAR_PURCHASE_HOLD_MINUTES", 10)) * time.Minute,
-			NimiqNetwork:    envOrDefault("NIMNEAR_NIMIQ_NETWORK", ""),
-			MerchantAddress: envOrDefault("NIMNEAR_MERCHANT_ADDRESS", ""),
-			NimiqRPCURL:     envOrDefault("NIMNEAR_NIMIQ_RPC_URL", ""),
+			HoldDuration:            time.Duration(envOrDefaultInt("NIMNEAR_PURCHASE_HOLD_MINUTES", 10)) * time.Minute,
+			ReconciliationInterval:  time.Duration(envOrDefaultInt("NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS", 30)) * time.Second,
+			ReconciliationDeadline:  time.Duration(envOrDefaultInt("NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES", 60)) * time.Minute,
+			ReconciliationBatchSize: envOrDefaultInt("NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE", 50),
+			NimiqNetwork:            envOrDefault("NIMNEAR_NIMIQ_NETWORK", ""),
+			MerchantAddress:         envOrDefault("NIMNEAR_MERCHANT_ADDRESS", ""),
+			NimiqRPCURL:             envOrDefault("NIMNEAR_NIMIQ_RPC_URL", ""),
 		},
 		Log: LogConfig{
 			Level:  envOrDefault("LOG_LEVEL", "info"),

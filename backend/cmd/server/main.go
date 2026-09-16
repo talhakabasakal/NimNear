@@ -129,8 +129,12 @@ func run() error {
 	eventBus := initEventBus(ctx, cfg, log)
 	defer func() { _ = eventBus.Close() }()
 
+	// Start long-lived background work with a context independent from startup initialization.
+	reconciliationCtx, cancelReconciliation := context.WithCancel(context.Background())
+	defer cancelReconciliation()
+
 	// Build dependencies
-	deps := buildDependencies(log, cfg, db, redisClient, eventBus)
+	deps := buildDependencies(reconciliationCtx, log, cfg, db, redisClient, eventBus)
 
 	// Build router
 	r := router.New(deps)
@@ -213,6 +217,7 @@ func initEventBus(ctx context.Context, cfg *config.Config, log *slog.Logger) eve
 }
 
 func buildDependencies(
+	reconciliationCtx context.Context,
 	log *slog.Logger,
 	cfg *config.Config,
 	db *pgxpool.Pool,
@@ -277,13 +282,20 @@ func buildDependencies(
 	if cfg.Payments.Enabled() {
 		nimiqClient := nimiqRPC.NewClient(cfg.Payments.NimiqRPCURL)
 		nimiqVerifier := nimiqRPC.NewVerifier(nimiqClient, cfg.Payments.MerchantAddress, cfg.Payments.NimiqNetwork)
-		purchaseUseCase = purchaseUC.NewPurchaseUseCaseWithVerifier(
+		purchaseUseCase = purchaseUC.NewPurchaseUseCaseWithVerifierAndPolicy(
 			purchaseRepo,
 			cfg.Payments.HoldDuration,
 			nimiqVerifier,
 			cfg.Payments.MerchantAddress,
 			cfg.Payments.NimiqNetwork,
+			purchaseUC.ReconciliationPolicy{
+				Interval:  cfg.Payments.ReconciliationInterval,
+				Deadline:  cfg.Payments.ReconciliationDeadline,
+				BatchSize: cfg.Payments.ReconciliationBatchSize,
+			},
 		)
+		purchaseWorker := purchaseUC.NewReconciliationWorker(purchaseUseCase, log)
+		go purchaseWorker.Run(reconciliationCtx)
 	}
 	profileUseCase := profileUC.NewProfileUseCase(pgProfile.NewProfileRepo(db), eventRepo)
 	nearbyPlacesUC := placeUC.NewNearbyPlacesUseCase(placeRepo)

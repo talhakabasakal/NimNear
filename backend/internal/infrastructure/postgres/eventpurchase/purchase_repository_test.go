@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/model"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 )
 
@@ -159,5 +161,141 @@ func TestPurchaseRepositoryOwnerScopedRead(t *testing.T) {
 	}
 	if _, err := repo.GetOwned(context.Background(), purchase.ID, userTwo); !errors.Is(err, domainErr.ErrNotFound) {
 		t.Fatalf("foreign read error = %v", err)
+	}
+}
+
+func TestPurchaseRepositoryVerificationClaimIsExclusiveAndTerminalStateWins(t *testing.T) {
+	pool := testPurchaseDB(t)
+	repo := NewPurchaseRepo(pool)
+	now := time.Now().UTC()
+	eventID, userOne, _ := createPurchaseFixture(t, pool, nil, 1250000, now.Add(2*time.Hour))
+	purchase, err := repo.Create(context.Background(), eventID, userOne, now, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("create purchase: %v", err)
+	}
+	deadline := now.Add(time.Hour)
+	purchase, err = repo.SubmitTransaction(context.Background(), purchase.ID, userOne, strings.Repeat("a", 64), now, deadline)
+	if err != nil {
+		t.Fatalf("submit transaction: %v", err)
+	}
+
+	claims := make(chan *model.Purchase, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, claimErr := repo.ClaimVerification(context.Background(), purchase.ID, userOne, now, time.Minute, time.Minute, false)
+			if claimErr != nil {
+				t.Errorf("claim verification: %v", claimErr)
+				return
+			}
+			claims <- claimed
+		}()
+	}
+	wg.Wait()
+	close(claims)
+	var claimedCount int
+	for claim := range claims {
+		if claim != nil {
+			claimedCount++
+		}
+	}
+	if claimedCount != 1 {
+		t.Fatalf("claimed count = %d, want exactly one", claimedCount)
+	}
+
+	candidates, err := repo.ListReconciliationCandidates(context.Background(), now, time.Minute, time.Hour, 10)
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("candidate count while claim is leased = %d, want 0", len(candidates))
+	}
+
+	confirmed, err := repo.SetVerificationState(context.Background(), purchase.ID, userOne, model.StatusConfirmed, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("confirm purchase: %v", err)
+	}
+	if confirmed.Status != model.StatusConfirmed {
+		t.Fatalf("status = %q, want confirmed", confirmed.Status)
+	}
+	unchanged, err := repo.ExpireUnresolved(context.Background(), purchase.ID, userOne, now.Add(2*time.Hour), time.Hour)
+	if err != nil {
+		t.Fatalf("expire terminal purchase: %v", err)
+	}
+	if unchanged.Status != model.StatusConfirmed {
+		t.Fatalf("terminal status resurrected/changed to %q", unchanged.Status)
+	}
+}
+
+func TestPurchaseRepositoryRSVPRemainsCapacityActive(t *testing.T) {
+	pool := testPurchaseDB(t)
+	repo := NewPurchaseRepo(pool)
+	now := time.Now().UTC()
+	capacity := 1
+	eventID, rsvpUser, otherUser := createPurchaseFixture(t, pool, &capacity, 1250000, now.Add(2*time.Hour))
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO event_participants (event_id, user_id) VALUES ($1, $2)`, eventID, rsvpUser); err != nil {
+		t.Fatalf("insert RSVP fixture: %v", err)
+	}
+	if _, err := repo.Create(context.Background(), eventID, otherUser, now, time.Minute); !errors.Is(err, domainErr.ErrSoldOut) {
+		t.Fatalf("purchase after RSVP error = %v, want sold out", err)
+	}
+}
+
+func TestPurchaseRepositoryTransactionHashSubmissionIsIdempotentAndUnique(t *testing.T) {
+	pool := testPurchaseDB(t)
+	repo := NewPurchaseRepo(pool)
+	now := time.Now().UTC()
+	eventID, userOne, userTwo := createPurchaseFixture(t, pool, nil, 1250000, now.Add(2*time.Hour))
+	first, err := repo.Create(context.Background(), eventID, userOne, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create first purchase: %v", err)
+	}
+	second, err := repo.Create(context.Background(), eventID, userTwo, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create second purchase: %v", err)
+	}
+	hash := strings.Repeat("b", 64)
+	if _, err := repo.SubmitTransaction(context.Background(), first.ID, userOne, hash, now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("submit first purchase: %v", err)
+	}
+	retry, err := repo.SubmitTransaction(context.Background(), first.ID, userOne, hash, now.Add(time.Second), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("idempotent submit: %v", err)
+	}
+	if retry.ID != first.ID || retry.TransactionHash == nil || *retry.TransactionHash != hash {
+		t.Fatalf("unexpected idempotent retry: %#v", retry)
+	}
+	if _, err := repo.SubmitTransaction(context.Background(), second.ID, userTwo, hash, now, now.Add(time.Hour)); !errors.Is(err, domainErr.ErrAlreadyExists) {
+		t.Fatalf("duplicate hash error = %v, want already exists", err)
+	}
+}
+
+func TestPurchaseRepositoryExpiredUnresolvedPaymentReleasesCapacity(t *testing.T) {
+	pool := testPurchaseDB(t)
+	repo := NewPurchaseRepo(pool)
+	now := time.Now().UTC()
+	capacity := 1
+	eventID, userOne, userTwo := createPurchaseFixture(t, pool, &capacity, 1250000, now.Add(2*time.Hour))
+	first, err := repo.Create(context.Background(), eventID, userOne, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create first purchase: %v", err)
+	}
+	if _, err := repo.SubmitTransaction(context.Background(), first.ID, userOne, strings.Repeat("c", 64), now, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("submit stale purchase: %v", err)
+	}
+	if expired, err := repo.ExpireUnresolved(context.Background(), first.ID, userOne, now, time.Hour); err != nil {
+		t.Fatalf("expire stale purchase: %v", err)
+	} else if expired.Status != model.StatusExpired {
+		t.Fatalf("status = %q, want expired", expired.Status)
+	}
+	replacement, err := repo.Create(context.Background(), eventID, userTwo, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create replacement after expiry: %v", err)
+	}
+	if replacement.Status != model.StatusPending {
+		t.Fatalf("replacement status = %q, want pending", replacement.Status)
 	}
 }

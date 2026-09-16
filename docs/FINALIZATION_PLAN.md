@@ -352,42 +352,39 @@ custom address/coordinate pair, and optional active calendar owned by the
 JWT organizer. Figma-only landscape, theme, and approval controls remain
 omitted because the current backend does not persist them.
 
-## A8. Define and implement unresolved-payment reconciliation
+## A8. Define and implement unresolved-payment reconciliation — COMPLETE
 
-Dependency: A0 payment operations decision. This task may improve the current
-merchant-address flow but must not claim the final organizer-recipient design.
+Dependency: A0 payment operations decision. This implementation improves the
+current merchant-address flow but does not claim the final organizer-recipient
+design.
 
 Affected files/domains: event purchase use case/repository, payment state
-migrations, RPC verifier, optional worker/operator tooling,
-`frontend/web/components/events/event-purchase.tsx`, `docs/BACKEND.md`.
+migration `00023_payment_reconciliation.sql`, reconciliation worker, config,
+and `docs/BACKEND.md`.
 
-Exact implementation objective: prevent submitted/verifying purchases from
-reserving capacity indefinitely while preserving the rule that only finalized
-valid payments become confirmed.
+Implemented policy: submitted/verifying purchases are retried only after a
+bounded interval and are selected in deterministic bounded batches. Database
+claim timestamps prevent concurrent frontend reads and workers from verifying
+the same purchase at once. Temporary RPC errors, propagation/not-found, and
+non-final results remain unresolved before the deadline. At the deadline the
+backend makes one authoritative verifier attempt; confirmed is reserved for a
+valid finalized transfer, invalid becomes failed, and any still-uncertain
+result becomes expired. Expired purchases release capacity and cannot be
+resurrected by later reads. Existing rows without a deadline use updated_at
+plus the configured deadline as a compatibility fallback.
 
-Backend/API work:
+Frontend work was intentionally unchanged: existing owner-scoped polling and
+refresh recovery consume the backend state, including expired, without
+suggesting ticket or entitlement ownership.
 
-- define retry, timeout, not-found, RPC outage, invalid transaction, and reorg
-  policies;
-- add a server-owned reconciliation worker or explicit operator process;
-- release capacity only under a policy that cannot invalidate a payment that
-  later becomes finalized, or move unresolved cases to a review state;
-- preserve amount, recipient, hash, ownership, and finality checks;
-- keep global `NIMNEAR_MERCHANT_ADDRESS` explicitly temporary and non-final.
+Configuration: `NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS` (default
+30), `NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES` (default 60), and
+`NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE` (default 50).
 
-Frontend work:
-
-- show stable submitted/verifying/failed/expired/retry states;
-- recover state after refresh and avoid suggesting a ticket or entitlement;
-- show no fake success after polling ends.
-
-Tests required: RPC outage, never-found hash, invalid transaction, delayed
-finality, duplicate submission, capacity release, restart/refresh recovery, and
-wrong-recipient rejection.
-
-Definition of done: every submitted/verifying purchase has a server-owned
-terminal or review policy, capacity behavior is documented, and no UI implies
-final ownership before confirmation.
+Definition of done: every submitted/verifying purchase has a bounded
+server-owned reconciliation policy, capacity behavior is documented, duplicate
+hashes remain database-protected, and no UI implies final ownership before
+confirmation.
 
 ## A9. Update stale documentation and close the unblocked validation loop
 

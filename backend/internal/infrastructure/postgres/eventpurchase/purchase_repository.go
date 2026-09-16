@@ -69,6 +69,7 @@ func (r *PurchaseRepo) Create(ctx context.Context, eventID, userID uuid.UUID, no
 	var existing model.Purchase
 	err = tx.QueryRow(ctx, `
         SELECT id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+               reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                transaction_hash, created_at, updated_at, confirmed_at
         FROM event_purchases
         WHERE event_id = $1 AND user_id = $2
@@ -118,6 +119,7 @@ func (r *PurchaseRepo) Create(ctx context.Context, eventID, userID uuid.UUID, no
             created_at, updated_at
         ) VALUES ($1, $2, $3, 'pending', $4, $5, $5)
         RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+                  reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                   transaction_hash, created_at, updated_at, confirmed_at`,
 		eventID, userID, priceLunas, holdExpiresAt, now).Scan(purchaseArgs(&created)...); err != nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to create purchase", err)
@@ -133,6 +135,7 @@ func (r *PurchaseRepo) GetOwned(ctx context.Context, purchaseID, userID uuid.UUI
 	var purchase model.Purchase
 	err := r.db.QueryRow(ctx, `
         SELECT id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+               reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                transaction_hash, created_at, updated_at, confirmed_at
         FROM event_purchases
         WHERE id = $1 AND user_id = $2`, purchaseID, userID).Scan(purchaseArgs(&purchase)...)
@@ -161,6 +164,7 @@ func (r *PurchaseRepo) GetActiveForEvent(ctx context.Context, eventID, userID uu
 	var purchase model.Purchase
 	err = r.db.QueryRow(ctx, `
         SELECT id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+               reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                transaction_hash, created_at, updated_at, confirmed_at
         FROM event_purchases
         WHERE event_id = $1 AND user_id = $2
@@ -177,7 +181,7 @@ func (r *PurchaseRepo) GetActiveForEvent(ctx context.Context, eventID, userID uu
 }
 
 // SubmitTransaction persists only a validated hash and pins capacity while verification is pending.
-func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID uuid.UUID, transactionHash string, now time.Time) (*model.Purchase, error) {
+func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID uuid.UUID, transactionHash string, now, reconciliationDeadline time.Time) (*model.Purchase, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to begin transaction submission", err)
@@ -187,6 +191,7 @@ func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID
 	var current model.Purchase
 	err = tx.QueryRow(ctx, `
         SELECT id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+               reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                transaction_hash, created_at, updated_at, confirmed_at
         FROM event_purchases
         WHERE id = $1 AND user_id = $2
@@ -213,11 +218,14 @@ func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID
 	if err := tx.QueryRow(ctx, `
         UPDATE event_purchases
         SET status = 'submitted', transaction_hash = $3,
-            capacity_hold_expires_at = NULL, updated_at = $4
+            capacity_hold_expires_at = NULL, reconciliation_deadline_at = $5,
+            last_verification_attempt_at = NULL, verification_claimed_until = NULL,
+            updated_at = $4
         WHERE id = $1 AND user_id = $2 AND status = 'pending'
         RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+                  reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                   transaction_hash, created_at, updated_at, confirmed_at`,
-		purchaseID, userID, transactionHash, now).Scan(purchaseArgs(&submitted)...); err != nil {
+		purchaseID, userID, transactionHash, now, reconciliationDeadline).Scan(purchaseArgs(&submitted)...); err != nil {
 		if isUniqueViolation(err) {
 			return nil, domainErr.NewWithCode(domainErr.ErrAlreadyExists, "transaction_hash_used", "transaction hash is already assigned to another purchase", err)
 		}
@@ -227,6 +235,114 @@ func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to commit transaction submission", err)
 	}
 	return &submitted, nil
+}
+
+// ClaimVerification atomically claims one verification attempt. The claim and retry
+// timestamps prevent concurrent requests and workers from repeatedly calling the RPC.
+func (r *PurchaseRepo) ClaimVerification(ctx context.Context, purchaseID, userID uuid.UUID, now time.Time, retryInterval, claimDuration time.Duration, force bool) (*model.Purchase, error) {
+	if retryInterval < 0 {
+		retryInterval = 0
+	}
+	if claimDuration < 30*time.Second {
+		claimDuration = 30 * time.Second
+	}
+	threshold := now.Add(-retryInterval)
+	var purchase model.Purchase
+	err := r.db.QueryRow(ctx, `
+        UPDATE event_purchases
+        SET last_verification_attempt_at = $3,
+            verification_claimed_until = $3 + ($6 * INTERVAL '1 second')
+        WHERE id = $1 AND user_id = $2
+          AND status IN ('submitted', 'verifying')
+          AND (verification_claimed_until IS NULL OR verification_claimed_until <= $3)
+          AND ($5 OR last_verification_attempt_at IS NULL OR last_verification_attempt_at <= $4)
+        RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+                  reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
+                  transaction_hash, created_at, updated_at, confirmed_at`,
+		purchaseID, userID, now, threshold, force, int64(claimDuration/time.Second)).Scan(purchaseArgs(&purchase)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to claim payment verification", err)
+	}
+	return &purchase, nil
+}
+
+// ListReconciliationCandidates returns a deterministic, bounded batch of unresolved purchases.
+func (r *PurchaseRepo) ListReconciliationCandidates(ctx context.Context, now time.Time, retryInterval, fallbackDeadline time.Duration, limit int) ([]*model.Purchase, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if retryInterval < 0 {
+		retryInterval = 0
+	}
+	if fallbackDeadline <= 0 {
+		fallbackDeadline = time.Hour
+	}
+	rows, err := r.db.Query(ctx, `
+        SELECT id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+               reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
+               transaction_hash, created_at, updated_at, confirmed_at
+        FROM event_purchases
+        WHERE status IN ('submitted', 'verifying')
+          AND (verification_claimed_until IS NULL OR verification_claimed_until <= $1)
+          AND (
+              COALESCE(reconciliation_deadline_at, updated_at + ($3 * INTERVAL '1 second')) <= $1
+              OR last_verification_attempt_at IS NULL
+              OR last_verification_attempt_at <= $2
+          )
+        ORDER BY CASE WHEN reconciliation_deadline_at IS NULL THEN 1 ELSE 0 END,
+                 COALESCE(reconciliation_deadline_at, updated_at + ($3 * INTERVAL '1 second')),
+                 id
+        LIMIT $4`, now, now.Add(-retryInterval), int64(fallbackDeadline/time.Second), limit)
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to list payment reconciliation candidates", err)
+	}
+	defer rows.Close()
+	purchases := make([]*model.Purchase, 0, limit)
+	for rows.Next() {
+		var purchase model.Purchase
+		if err := rows.Scan(purchaseArgs(&purchase)...); err != nil {
+			return nil, domainErr.New(domainErr.ErrInternal, "failed to read payment reconciliation candidate", err)
+		}
+		purchases = append(purchases, &purchase)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to iterate payment reconciliation candidates", err)
+	}
+	return purchases, nil
+}
+
+// ExpireUnresolved releases an unresolved submitted/verifying purchase only after its
+// reconciliation deadline. It cannot affect a terminal or confirmed purchase.
+func (r *PurchaseRepo) ExpireUnresolved(ctx context.Context, purchaseID, userID uuid.UUID, now time.Time, fallbackDeadline time.Duration) (*model.Purchase, error) {
+	if fallbackDeadline <= 0 {
+		fallbackDeadline = time.Hour
+	}
+	var purchase model.Purchase
+	err := r.db.QueryRow(ctx, `
+        UPDATE event_purchases
+        SET status = 'expired', capacity_hold_expires_at = NULL,
+            verification_claimed_until = NULL, updated_at = $3
+        WHERE id = $1 AND user_id = $2
+          AND status IN ('submitted', 'verifying')
+          AND COALESCE(reconciliation_deadline_at, updated_at + ($4 * INTERVAL '1 second')) <= $3
+        RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+                  reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
+                  transaction_hash, created_at, updated_at, confirmed_at`,
+		purchaseID, userID, now, int64(fallbackDeadline/time.Second)).Scan(purchaseArgs(&purchase)...)
+	if err == nil {
+		return &purchase, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to expire unresolved purchase", err)
+	}
+	current, getErr := r.GetOwned(ctx, purchaseID, userID)
+	if getErr != nil {
+		return nil, getErr
+	}
+	return current, nil
 }
 
 // SetVerificationState applies only server-decided verification outcomes.
@@ -240,11 +356,13 @@ func (r *PurchaseRepo) SetVerificationState(ctx context.Context, purchaseID, use
         UPDATE event_purchases
         SET status = $3,
             capacity_hold_expires_at = NULL,
+            verification_claimed_until = NULL,
             confirmed_at = CASE WHEN $3 = 'confirmed' THEN COALESCE(confirmed_at, $4) ELSE confirmed_at END,
             updated_at = $4
         WHERE id = $1 AND user_id = $2
           AND status IN ('submitted', 'verifying')
         RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+                  reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                   transaction_hash, created_at, updated_at, confirmed_at`,
 		purchaseID, userID, string(status), now).Scan(purchaseArgs(&purchase)...)
 	if err == nil {
@@ -270,7 +388,8 @@ func (r *PurchaseRepo) SetVerificationState(ctx context.Context, purchaseID, use
 func purchaseArgs(p *model.Purchase) []any {
 	return []any{
 		&p.ID, &p.EventID, &p.UserID, &p.AmountLunas, &p.Status,
-		&p.CapacityHoldExpiresAt, &p.TransactionHash, &p.CreatedAt, &p.UpdatedAt, &p.ConfirmedAt,
+		&p.CapacityHoldExpiresAt, &p.ReconciliationDeadlineAt, &p.LastVerificationAttemptAt,
+		&p.VerificationClaimedUntil, &p.TransactionHash, &p.CreatedAt, &p.UpdatedAt, &p.ConfirmedAt,
 	}
 }
 

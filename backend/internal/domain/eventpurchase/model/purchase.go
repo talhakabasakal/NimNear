@@ -21,14 +21,17 @@ const (
 
 // Purchase is a server-side payment record. Amount and status are never client-owned.
 type Purchase struct {
-	ID                    uuid.UUID
-	EventID               uuid.UUID
-	UserID                uuid.UUID
-	AmountLunas           int64
-	Status                Status
-	CapacityHoldExpiresAt *time.Time
-	TransactionHash       *string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	ConfirmedAt           *time.Time
+	ID                        uuid.UUID
+	EventID                   uuid.UUID
+	UserID                    uuid.UUID
+	AmountLunas               int64
+	Status                    Status
+	CapacityHoldExpiresAt     *time.Time
+	ReconciliationDeadlineAt  *time.Time
+	LastVerificationAttemptAt *time.Time
+	VerificationClaimedUntil  *time.Time
+	TransactionHash           *string
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	ConfirmedAt               *time.Time
 }

@@ -155,12 +155,14 @@ The payment path is:
 
 The backend owns amount, merchant recipient, network, purchase ownership, hash uniqueness, verification, and finality. The frontend owns presentation, wallet invocation, rejection state, and bounded polling. @nimiq/mini-app-sdk is isolated to the client payment component; private keys never enter NIMNear.
 
-The verifier uses the configured JSON-RPC endpoint. It checks the exact recipient and Luna amount, transaction hash, basic transfer fields, execution result, containing micro-block network, inclusion, and later-batch finality. It does not use a confirmation-count heuristic. Not-found/RPC-unavailable results stay retryable; non-final inclusion becomes verifying; only a finalized valid transfer becomes confirmed.
+The verifier uses the configured JSON-RPC endpoint. It checks the exact recipient and Luna amount, transaction hash, basic transfer fields, execution result, containing micro-block network, inclusion, and later-batch finality. It does not use a confirmation-count heuristic. Not-found/propagation and RPC-unavailable results stay unresolved before the deadline; non-final inclusion becomes verifying; only a finalized valid transfer becomes confirmed.
 
 Purchase state transitions are server-owned:
 
     pending -> submitted -> verifying -> confirmed
+    submitted -> confirmed (when the first verifier attempt is already final)
     pending -> expired
     submitted/verifying -> failed
+    submitted/verifying -> expired
 
-The hash submission operation is idempotent for the same owner/hash. A unique database index prevents replaying one hash across purchases. Submitted/verifying purchases remain active for capacity and have their hold expiry cleared, preventing money from finalizing after a silently released capacity hold. Ticket, QR, check-in, refund, payout, notification, entitlement, and background-worker domains are intentionally outside this phase.
+The hash submission operation is idempotent for the same owner/hash. A unique database index prevents replaying one hash across purchases. Submitted/verifying purchases remain active for capacity and have their hold expiry cleared. A bounded, restart-safe reconciliation worker claims attempts in the database, preserves the verifier as the payment authority, and processes deterministic batches. Each submitted/verifying purchase has a reconciliation deadline: a final verifier attempt confirms valid final transfers, fails conclusively invalid transfers, and expires still-uncertain results so capacity is released without silently confirming them. Ticket, QR, check-in, refund, payout, notification, entitlement, organizer-recipient, and Nimiq-auth domains remain outside this phase.

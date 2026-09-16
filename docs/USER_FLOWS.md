@@ -171,5 +171,6 @@ The implemented paid-event flow stops after confirmed purchase:
 8. The event detail shows İşlem ağa gönderildi / Ödeme doğrulanıyor while the backend checks RPC inclusion and macro finality.
 9. Only a server-confirmed finalized transfer shows Ödeme doğrulandı.
 10. Reopening the event recovers the persisted purchase state.
+11. If the backend cannot conclusively verify the transfer before the configured reconciliation deadline, the purchase becomes expired and the UI does not show payment success or a ticket.
 
 This is an implemented product/API flow, but the inspected Figma file did not confirm dedicated checkout, processing, or payment-success frames. Ticket, QR, check-in, refund, payout, notification, and multiple-ticket flows remain unconfirmed and unimplemented.
