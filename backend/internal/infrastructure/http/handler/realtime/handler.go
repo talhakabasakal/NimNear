@@ -30,13 +30,13 @@ type Handler struct {
 
 // Config holds handler dependencies.
 type Config struct {
-	ValidateUC     *realtimeUC.ValidateConnectUseCase
-	AuthService    iamService.AuthService
-	Hub            *infraWS.Hub
-	Upgrader       gorillaws.Upgrader
-	PingInterval   int
-	Logger         *slog.Logger
-	Enabled        bool
+	ValidateUC   *realtimeUC.ValidateConnectUseCase
+	AuthService  iamService.AuthService
+	Hub          *infraWS.Hub
+	Upgrader     gorillaws.Upgrader
+	PingInterval int
+	Logger       *slog.Logger
+	Enabled      bool
 }
 
 // NewHandler creates a new WebSocket handler.

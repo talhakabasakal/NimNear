@@ -16,14 +16,14 @@ import (
 
 // Handler provides Tenant HTTP handlers.
 type Handler struct {
-	createOrgUC        *usecase.CreateOrgUseCase
-	createAppUC        *usecase.CreateAppUseCase
-	manageKeysUC       *usecase.ManageAPIKeysUseCase
-	createWorkspaceUC  *usecase.CreateWorkspaceUseCase
-	listWorkspacesUC   *usecase.ListWorkspacesUseCase
-	updateWorkspaceUC  *usecase.UpdateWorkspaceUseCase
-	orgRepo            repository.OrgRepository
-	appRepo            repository.AppRepository
+	createOrgUC       *usecase.CreateOrgUseCase
+	createAppUC       *usecase.CreateAppUseCase
+	manageKeysUC      *usecase.ManageAPIKeysUseCase
+	createWorkspaceUC *usecase.CreateWorkspaceUseCase
+	listWorkspacesUC  *usecase.ListWorkspacesUseCase
+	updateWorkspaceUC *usecase.UpdateWorkspaceUseCase
+	orgRepo           repository.OrgRepository
+	appRepo           repository.AppRepository
 }
 
 // NewHandler creates a new Tenant handler.

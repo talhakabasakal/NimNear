@@ -192,7 +192,7 @@ func (r *DynamicHandlerResolver) buildTargetURL(baseURL string, endpoint *model.
 
 	// Build full URL
 	targetURL := base.ResolveReference(&url.URL{Path: path})
-	
+
 	// Preserve query parameters
 	targetURL.RawQuery = req.URL.RawQuery
 
@@ -215,17 +215,17 @@ func (r *DynamicHandlerResolver) deriveTableName(endpoint *model.Endpoint) strin
 
 	// Derive from backend_service name dynamically
 	serviceName := endpoint.BackendService
-	
+
 	// Remove common suffixes: "-service", "-api", "-handler"
 	serviceName = strings.TrimSuffix(serviceName, "-service")
 	serviceName = strings.TrimSuffix(serviceName, "-api")
 	serviceName = strings.TrimSuffix(serviceName, "-handler")
-	
+
 	// Simple pluralization: add 's' if not ending in 's'
 	if !strings.HasSuffix(serviceName, "s") {
 		serviceName = serviceName + "s"
 	}
-	
+
 	return serviceName
 }
 
@@ -365,11 +365,11 @@ func (r *DynamicHandlerResolver) handleList(ctx context.Context, tableName strin
 	}
 
 	return map[string]interface{}{
-		"data":  records,
-		"count": len(records),
-		"total": total,
+		"data":   records,
+		"count":  len(records),
+		"total":  total,
 		"offset": offset,
-		"limit": limit,
+		"limit":  limit,
 	}, http.StatusOK, nil
 }
 
@@ -516,7 +516,7 @@ func (r *DynamicHandlerResolver) handleDelete(ctx context.Context, tableName str
 func (r *DynamicHandlerResolver) extractIDFromPath(path, tableName string) (uuid.UUID, error) {
 	pathParts := strings.Split(strings.Trim(path, "/"), "/")
 	singularName := strings.TrimSuffix(tableName, "s") // "orders" -> "order"
-	
+
 	for i, part := range pathParts {
 		if i > 0 && strings.EqualFold(pathParts[i-1], singularName) {
 			recordID, err := uuid.Parse(part)

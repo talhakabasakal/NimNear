@@ -10,8 +10,8 @@ import (
 type UserStatus string
 
 const (
-	UserStatusActive   UserStatus = "active"
-	UserStatusInactive UserStatus = "inactive"
+	UserStatusActive    UserStatus = "active"
+	UserStatusInactive  UserStatus = "inactive"
 	UserStatusSuspended UserStatus = "suspended"
 )
 

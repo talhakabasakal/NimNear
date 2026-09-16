@@ -47,16 +47,16 @@ func TestSchemaValidator_InterceptRequest(t *testing.T) {
 			expectedError: "validation failed",
 		},
 		{
-			name:          "no schema defined - should pass",
-			schema:        nil,
-			body:          []byte(`{"name": "John"}`),
-			shouldPass:    true,
+			name:       "no schema defined - should pass",
+			schema:     nil,
+			body:       []byte(`{"name": "John"}`),
+			shouldPass: true,
 		},
 		{
-			name:          "empty body - should pass",
-			schema:        []byte(`{"type": "object"}`),
-			body:          []byte{},
-			shouldPass:    true,
+			name:       "empty body - should pass",
+			schema:     []byte(`{"type": "object"}`),
+			body:       []byte{},
+			shouldPass: true,
 		},
 	}
 

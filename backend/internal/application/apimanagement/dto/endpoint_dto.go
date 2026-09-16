@@ -9,15 +9,15 @@ import (
 
 // DefineEndpointRequest is the input for defining a new endpoint.
 type DefineEndpointRequest struct {
-	Method         string `json:"method" validate:"required,oneof=GET POST PUT PATCH DELETE"`
-	Path           string `json:"path" validate:"required"`
-	Version        string `json:"version"`
-	BackendService string `json:"backend_service" validate:"required"`
-	BackendAction  string `json:"backend_action" validate:"required"`
+	Method         string          `json:"method" validate:"required,oneof=GET POST PUT PATCH DELETE"`
+	Path           string          `json:"path" validate:"required"`
+	Version        string          `json:"version"`
+	BackendService string          `json:"backend_service" validate:"required"`
+	BackendAction  string          `json:"backend_action" validate:"required"`
 	Schema         json.RawMessage `json:"schema,omitempty"`
-	AuditLevel     string `json:"audit_level"`
-	PIIMasking     bool   `json:"pii_masking"`
-	EventAfter     string `json:"event_after,omitempty"`
+	AuditLevel     string          `json:"audit_level"`
+	PIIMasking     bool            `json:"pii_masking"`
+	EventAfter     string          `json:"event_after,omitempty"`
 }
 
 // EndpointInfo is a public endpoint representation.

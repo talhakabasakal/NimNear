@@ -93,7 +93,10 @@ func (r *AuditRepo) ListByResource(ctx context.Context, resourceType, resourceID
 	return r.scanLogs(rows, total)
 }
 
-func (r *AuditRepo) scanLogs(rows interface{ Next() bool; Scan(dest ...interface{}) error }, total int) ([]*model.AuditLog, int, error) {
+func (r *AuditRepo) scanLogs(rows interface {
+	Next() bool
+	Scan(dest ...interface{}) error
+}, total int) ([]*model.AuditLog, int, error) {
 	var logs []*model.AuditLog
 	for rows.Next() {
 		var l model.AuditLog

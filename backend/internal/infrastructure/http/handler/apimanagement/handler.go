@@ -15,12 +15,12 @@ import (
 
 // Handler provides API Management HTTP handlers.
 type Handler struct {
-	defineEndpointUC  *usecase.DefineEndpointUseCase
-	updatePolicyUC    *usecase.UpdatePolicyUseCase
-	retireEndpointUC  *usecase.RetireEndpointUseCase
+	defineEndpointUC   *usecase.DefineEndpointUseCase
+	updatePolicyUC     *usecase.UpdatePolicyUseCase
+	retireEndpointUC   *usecase.RetireEndpointUseCase
 	activateEndpointUC *usecase.ActivateEndpointUseCase
-	endpointRepo      repository.EndpointRepository
-	policyRepo        repository.PolicyRepository
+	endpointRepo       repository.EndpointRepository
+	policyRepo         repository.PolicyRepository
 }
 
 // NewHandler creates a new API Management handler.
@@ -33,12 +33,12 @@ func NewHandler(
 	policyRepo repository.PolicyRepository,
 ) *Handler {
 	return &Handler{
-		defineEndpointUC:  defineEndpointUC,
-		updatePolicyUC:    updatePolicyUC,
-		retireEndpointUC:  retireEndpointUC,
+		defineEndpointUC:   defineEndpointUC,
+		updatePolicyUC:     updatePolicyUC,
+		retireEndpointUC:   retireEndpointUC,
 		activateEndpointUC: activateEndpointUC,
-		endpointRepo:      endpointRepo,
-		policyRepo:        policyRepo,
+		endpointRepo:       endpointRepo,
+		policyRepo:         policyRepo,
 	}
 }
 

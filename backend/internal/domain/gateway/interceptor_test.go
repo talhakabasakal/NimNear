@@ -93,7 +93,7 @@ func TestChain_InterceptResponse_ReverseOrder(t *testing.T) {
 
 	_, err := chain.InterceptResponse(context.Background(), req, resp)
 	require.NoError(t, err)
-	
+
 	// Both should be called
 	assert.True(t, interceptor1.responseCalled)
 	assert.True(t, interceptor2.responseCalled)
