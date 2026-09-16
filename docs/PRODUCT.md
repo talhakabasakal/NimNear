@@ -60,12 +60,20 @@ Nimiq integration should feel like part of the product rather than a separate cr
 
 ## MVP Direction
 
+This section is product direction, not a claim that every item is implemented. The current runtime status is recorded below.
+
 The MVP is expected to focus on:
 1. discovering nearby places/experiences;
 2. browsing discovery results;
 3. viewing details;
 4. basic user actions such as favorites;
 5. Nimiq integration where required by the finalized product flow.
+
+## Current implementation boundary
+
+Implemented backend-backed surfaces include event discovery/detail, active-place discovery/detail, public profiles and profile editing through the legacy JWT, free RSVP, public calendars and legacy-JWT-protected calendar mutations, event creation through the legacy JWT, and paid purchase verification/reconciliation to a configured global merchant.
+
+The normal frontend account-entry UX uses Nimiq Pay listAccounts(), but this is not backend authentication. Protected operations still require the existing JWT. Native Nimiq signature authentication is NO-GO pending the unresolved official Mini App signing contract. Organizer verified recipients, organizer payouts, entitlements, tickets, QR/check-in, refunds, notifications, and city subscription/taxonomy behavior are not implemented.
 
 ## Out of Scope Until Explicitly Requested
 

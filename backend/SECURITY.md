@@ -1,4 +1,6 @@
-# Security Policy
+# NIMNear Backend Security Policy
+
+> This document covers the current Go backend and retained platform infrastructure. It is not a product feature specification. The security controls below are documentation of implemented boundaries; validate deployment configuration separately.
 
 ## Supported Versions
 
@@ -12,8 +14,7 @@
 
 Instead, please report them via one of the following methods:
 
-- **Email**: security@masterfabric.co
-- **Security advisory**: Use the repository's configured private security-reporting channel
+- Use the repository's configured private security-reporting channel. No public issue or unredacted credential report is appropriate.
 
 ### What to Include
 
@@ -32,7 +33,7 @@ When reporting a security vulnerability, please include:
 
 ## Trust Model
 
-nimnear-api is a multi-tenant API management platform. The server is trusted to enforce authentication, authorization, tenant isolation, and policy rules. Clients are untrusted. Administrative operators are trusted to configure secrets, CORS origins, and infrastructure bindings correctly.
+NIMNear is a Mini App API. The backend also retains multi-tenant API-management infrastructure from the inherited platform. The server is trusted to enforce authentication, authorization, tenant isolation, and policy rules. Clients are untrusted. Administrative operators are trusted to configure secrets, CORS origins, and infrastructure bindings correctly.
 
 ## Security Controls Registry v0.1
 
@@ -52,7 +53,7 @@ Baseline security controls implemented on the `security/hardening` branch (July 
 | SC-10 | HTTP surface | Global request body size cap | `MAX_BODY_BYTES` (default 1 MiB) via `middleware.MaxBodyBytes` | CWE-400 | ✅ Implemented |
 | SC-11 | Observability | Generic readiness probe responses | `internal/infrastructure/http/handler/health/handler.go` — no raw error strings | CWE-209 | ✅ Implemented |
 | SC-12 | Egress | Harden outbound HTTP proxy client | No redirect following, 30s timeout, 1 MiB response cap in `internal/gateway/dynamic_handler.go` | CWE-522 | ✅ Implemented |
-| SC-13 | Authentication | Detect default JWT signing secret | Startup warning in `cmd/server/main.go` when `JWT_SECRET` is unchanged | CWE-798 | ✅ Implemented |
+| SC-13 | Authentication | Fail closed on default JWT signing secret | Production validation in `internal/shared/config/config.go` rejects missing, empty, short, or known-default JWT settings before infrastructure initialization | CWE-798 | ✅ Implemented |
 | SC-14 | Authorization | Enforce RBAC on administrative routes | `RequirePermission` on all `/api/v1` admin routes in `router.go` | CWE-306 | ✅ Implemented |
 | SC-15 | Authorization | Wildcard-aware permission matching | `matchesPermission` in `internal/infrastructure/auth/rbac_service.go` (`*`, `org:*`, `*:read`) | CWE-285 | ✅ Implemented |
 | SC-16 | Input validation | Sanitize migration script names | `scripts/migrate.sh create` — `[a-zA-Z0-9_]` charset only | CWE-22 | ✅ Implemented |
@@ -83,7 +84,7 @@ Baseline security controls implemented on the `security/hardening` branch (July 
 
 ### Security Best Practices
 
-When using nimnear-api in production:
+When deploying NIMNear in production:
 
 - Change default `JWT_SECRET` to a strong, random value
 - Use SSL/TLS for database connections (`DB_SSLMODE=require`)
@@ -122,4 +123,4 @@ Security updates will be:
 - Tagged with security labels
 - Released as patch versions
 
-Thank you for helping keep nimnear-api secure!
+Thank you for helping keep NIMNear secure!

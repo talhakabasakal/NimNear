@@ -2,8 +2,8 @@
 
 Date: 2026-09-16
 
-This plan converts `docs/FINALIZATION_AUDIT.md` into executable work lanes.
-No code, migration, payment, or frontend behavior is changed by this document.
+This plan converts docs/FINALIZATION_AUDIT.md into executable work lanes.
+No code, migration, payment, or frontend behavior is changed by this document. A1–A9 are complete; this document records their current status and the remaining A10/B-lane work.
 
 ## Completion gate
 
@@ -77,7 +77,7 @@ Definition of done: each decision has one owner-approved outcome, and the
 documents identify what will be implemented, what will be removed, and what
 remains unconfirmed.
 
-## A1. Harden production configuration and environment separation
+## A1. Harden production configuration and environment separation — COMPLETE
 
 Dependency: A0 only. This does not depend on Nimiq identity.
 
@@ -121,7 +121,7 @@ Definition of done: a production-like startup cannot run with known defaults,
 the deployed origin/CORS/API/RPC settings are documented, and local development
 still works.
 
-## A2. Make API optional-field and media contracts explicit
+## A2. Make API optional-field and media contracts explicit — COMPLETE
 
 Dependency: A0 media decision. No Nimiq identity dependency.
 
@@ -159,7 +159,7 @@ failure tests, missing-field rendering tests, and CSP/image-origin review.
 Definition of done: API responses and TypeScript types agree, invalid media is
 rejected, and missing media renders only a clearly neutral UI state.
 
-## A3. Remove dead sample infrastructure and audit data provenance
+## A3. Remove dead sample infrastructure and audit data provenance — COMPLETE
 
 Dependency: A0. No Nimiq identity dependency.
 
@@ -196,7 +196,7 @@ Definition of done: no reachable sample handler returns application-looking
 records, no user-facing API failure displays fake records, and each remaining
 static value is classified as UI configuration or product data.
 
-## A4. Correct the homepage label and discovery semantics
+## A4. Correct the homepage label and discovery semantics — COMPLETE
 
 Dependency: A0 popularity decision. No Nimiq identity dependency.
 
@@ -386,14 +386,19 @@ server-owned reconciliation policy, capacity behavior is documented, duplicate
 hashes remain database-protected, and no UI implies final ownership before
 confirmation.
 
-## A9. Update stale documentation and close the unblocked validation loop
+## A9. Update stale documentation and close the unblocked validation loop — COMPLETE
 
 Dependency: A1–A8 decisions and completed behavior. No Nimiq cryptographic
 dependency except documenting the external blocker accurately.
 
-Affected files/domains: `docs/FRONTEND.md`, `docs/USER_FLOWS.md`,
-`docs/ARCHITECTURE.md`, `frontend/web/README.md`, `docs/BACKEND.md`,
-`docs/FINALIZATION_AUDIT.md` status references.
+Status: COMPLETE. Current root, backend, frontend, architecture, API, flow,
+provenance, gateway, product, and finalization documents now match the
+implemented routes and explicitly preserve the native-auth NO-GO boundary.
+
+Affected files/domains: root README, backend README/security/test/Postman
+documentation, gateway handler guide, frontend README, docs/ARCHITECTURE.md,
+docs/BACKEND.md, docs/FRONTEND.md, docs/PRODUCT.md, docs/USER_FLOWS.md,
+docs/DATA_PROVENANCE.md, and finalization status references.
 
 Exact implementation objective: make documentation describe native account
 connection as distinct from authentication, record the current blocked
@@ -413,7 +418,7 @@ Definition of done: no documentation tells users or implementers that
 `listAccounts()` authenticates them, and all unblocked behavior matches the
 actual repository.
 
-## A10. Lane A validation and release checklist
+## A10. Lane A validation and release checklist — NOT STARTED
 
 Dependency: all selected A0–A9 tasks.
 
@@ -716,7 +721,8 @@ retired only after approved migration evidence.
 8. A7 — align event creation with only fields the backend stores.
 9. A8 — implement unresolved-payment reconciliation while keeping the current
    recipient explicitly temporary.
-10. A9 — update stale docs after the unblocked behavior is stable.
+10. A9 — COMPLETE: align current documentation with implemented behavior and
+    preserve historical audit findings as historical.
 11. A10 — run the complete no-mock/data-provenance and static/runtime release
     checklist.
 12. B0 — obtain the external Nimiq contract and change the auth decision to GO.
@@ -731,4 +737,4 @@ This order keeps public discovery, truthful data, contract hygiene, and
 production safety moving now while preventing payment ownership or protected
 authorization from being built on an unverified Nimiq assumption.
 
-NEXT_TASK=A1 — Harden production configuration so unsafe JWT/database defaults and environment mixing fail closed.
+NEXT_TASK=A10 — Run the complete no-mock/data-provenance and static/runtime release checklist.

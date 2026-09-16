@@ -1,5 +1,7 @@
 # NIMNear Finalization Audit
 
+> Historical snapshot: this audit records the repository state and findings at the time it was run. A1–A8 were subsequently completed. Use the current implementation and docs/FINALIZATION_PLAN.md for present status; do not read the pre-A5/A8 findings below as current runtime facts.
+
 Date: 2026-09-16
 
 Scope: repository-wide completion, data provenance, API contract, Nimiq Mini App, payment, privacy, and production-readiness audit. The audit read the repository guidance and product documents, inspected all current frontend routes and backend domain slices, searched for mock/demo/fallback patterns, and ran the existing static validation. No application code, migrations, backend infrastructure, or existing worktree changes were modified by this audit.

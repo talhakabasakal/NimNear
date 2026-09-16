@@ -1,173 +1,50 @@
-# Dynamic Backend Handler System
+# Managed Gateway Handlers
 
-The Dynamic Backend Handler System automatically resolves and routes requests to backend services **without requiring pre-registration**. It supports multiple strategies for handling requests dynamically based on endpoint configuration.
+This document describes the legacy managed-endpoint gateway in
+backend/internal/gateway. It is infrastructure for explicitly configured
+organization/app endpoints, not the NIMNear event, place, calendar, profile,
+RSVP, or purchase API.
 
-## Architecture
+## Scope
 
-1. **DynamicHandlerResolver**: Automatically resolves handlers using multiple strategies
-2. **BackendRegistry**: Manages registered handlers (optional, for custom handlers)
-3. **Gateway Pipeline**: Integrates the resolver to route validated requests dynamically
+The explicit NIMNear domain routes are registered in
+backend/internal/infrastructure/http/router/router.go and use domain handlers,
+repositories, DTOs, and validation. Do not route those features through a
+generic product/example handler.
 
-## How It Works
+The gateway pipeline handles a request only when tenant/app context and a
+matching managed endpoint definition are present. An unregistered managed path
+is a 404; it is not a dynamic NIMNear product collection.
 
-The system uses **three strategies** in order:
+## Resolution order
 
-### Strategy 1: Registered Handlers (Optional)
-If you register a specific handler for a service, it will be used.
+DynamicHandlerResolver resolves a managed endpoint in this order:
 
-### Strategy 2: HTTP Proxy to External Services
-If `backend_service` is a URL (e.g., `https://api.example.com`) or has service configuration, requests are automatically proxied to that URL.
+1. an explicitly registered BackendHandler;
+2. an HTTP proxy when the endpoint service is a URL or configured mapping;
+3. the generic dynamic handler when endpoint metadata supports the operation.
 
-### Strategy 3: Generic Dynamic Handler
-If no handler or proxy is configured, a generic handler processes the request based on endpoint metadata (`backend_action`, `method`, etc.).
+A custom handler must be registered deliberately and must read authoritative
+data. The repository contains no shipped sample handler that returns Product 1,
+Product 2, new-id, or other fabricated records.
 
-**No pre-registration required!** Endpoints work immediately after being defined.
+## Managed endpoint requirements
 
-## Usage Examples
+Managed endpoint definitions carry method/path, service/action metadata, and
+optional schema/policy configuration. The gateway applies its existing
+authentication, tenant, RBAC, validation, and rate-limit pipeline before
+dispatching.
 
-### Option 1: Use Generic Dynamic Handler (No Configuration Needed)
+Use a managed endpoint only for a separately defined platform integration.
+NIMNear domain APIs must be added to the explicit router and documented in
+docs/BACKEND.md.
 
-Simply define an endpoint with `backend_service` and `backend_action`:
+## Safety boundary
 
-```json
-{
-  "method": "GET",
-  "path": "/products",
-  "backend_service": "product-service",
-  "backend_action": "list"
-}
-```
-
-The gateway will automatically handle the request using the generic dynamic handler.
-
-### Option 2: HTTP Proxy to External Service
-
-#### Method A: Use URL as backend_service
-
-```json
-{
-  "method": "GET",
-  "path": "/products",
-  "backend_service": "https://api.example.com/products",
-  "backend_action": "list"
-}
-```
-
-Requests will be automatically proxied to `https://api.example.com/products`.
-
-#### Method B: Configure Service Mapping
-
-In `cmd/server/main.go`:
-
-```go
-dynamicResolver.RegisterServiceConfig("product-service", gateway.ServiceConfig{
-    BaseURL: "https://api.example.com/products",
-    Headers: map[string]string{
-        "Authorization": "Bearer your-token",
-        "X-Custom-Header": "value",
-    },
-    Timeout: 30, // seconds
-})
-```
-
-Then define endpoints with `backend_service: "product-service"`.
-
-### Option 3: Register Custom Handler (For Complex Logic)
-
-If you need custom business logic:
-
-```go
-// 1. Implement BackendHandler interface
-type ProductHandler struct {
-    productRepo repository.ProductRepository
-}
-
-func (h *ProductHandler) Handle(ctx context.Context, endpoint *model.Endpoint, req *http.Request) (*http.Response, error) {
-    switch endpoint.BackendAction {
-    case "list":
-        products, _ := h.productRepo.List(ctx)
-        // ... return response
-    }
-}
-
-// 2. Register in main.go
-backendRegistry := gateway.NewBackendRegistry()
-productHandler := handlers.NewProductHandler(productRepo)
-backendRegistry.Register("product-service", productHandler)
-
-// 3. Create dynamic resolver with registry
-dynamicResolver := gateway.NewDynamicHandlerResolver(backendRegistry, log)
-```
-
-## Custom handler requirement
-
-NIMNear does not ship a sample handler that returns fabricated records. A custom handler must use an authoritative backend data source and be registered explicitly before a managed endpoint can dispatch to it.
-
-## Defining Endpoints
-
-When creating an endpoint via the API, specify:
-
-```json
-{
-  "method": "GET",
-  "path": "/products",
-  "backend_service": "product-service",
-  "backend_action": "list",
-  "schema": { ... },
-  "pii_masking": { ... }
-}
-```
-
-## Response Format
-
-Handlers should return `*http.Response` with:
-- Appropriate status code
-- `Content-Type: application/json` header
-- JSON body in the response
-
-Example:
-```go
-body, _ := json.Marshal(map[string]interface{}{
-    "data": products,
-    "count": len(products),
-})
-
-resp := &http.Response{
-    StatusCode: http.StatusOK,
-    Header:     make(http.Header),
-    Body:       io.NopCloser(bytes.NewReader(body)),
-}
-resp.Header.Set("Content-Type", "application/json")
-return resp, nil
-```
-
-## Benefits
-
-1. **Zero Configuration**: Endpoints work immediately after being defined - no code changes needed
-2. **Flexible Routing**: Supports registered handlers, HTTP proxying, and generic handling
-3. **Dynamic**: Handlers are resolved at runtime based on endpoint configuration
-4. **Backward Compatible**: Still supports registered handlers for custom logic
-5. **Separation of Concerns**: Gateway handles policies, handlers handle business logic
-6. **Scalability**: Different services can be implemented and deployed separately
-
-## How Dynamic Resolution Works
-
-When a request comes in:
-
-1. **Gateway validates** the endpoint (permissions, rate limits, schema, etc.)
-2. **Dynamic resolver** tries to resolve a handler:
-   - Checks if a handler is registered → Use registered handler
-   - Checks if `backend_service` is a URL → Proxy to that URL
-   - Checks if service has configuration → Proxy using configuration
-   - Otherwise → Use generic dynamic handler
-3. **Handler processes** the request based on `backend_action` and `method`
-4. **Response** is returned to the client
-
-## Generic Dynamic Handler Behavior
-
-The generic handler processes requests based on:
-- **HTTP Method**: GET, POST, PUT, PATCH, DELETE
-- **Backend Action**: list, get, create, update, delete
-- **Endpoint Metadata**: path, schema, etc.
-
-It returns appropriate responses for each action type, allowing endpoints to work immediately while you implement specific handlers or configure proxies.
+- Never put credentials, private keys, seed phrases, or production URLs in a
+  handler example.
+- Never treat generic dynamic responses as NIMNear application records.
+- Never use the gateway to bypass JWT authorization on protected NIMNear
+  operations.
+- The gateway has no role in Nimiq Pay account connection or the unresolved
+  Nimiq signature-to-JWT contract.

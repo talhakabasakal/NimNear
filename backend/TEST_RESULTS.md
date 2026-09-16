@@ -1,5 +1,7 @@
 # Test Results Summary
 
+> Historical snapshot: this file records an earlier platform-layer test run and is not the current A10 release-validation result. Run the commands in backend/README.md and docs/FINALIZATION_PLAN.md for current validation.
+
 ## ✅ Interceptor System Tests
 
 ### Schema Validator Tests (`schema_validator_test.go`)

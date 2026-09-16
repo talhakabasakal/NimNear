@@ -1,531 +1,199 @@
 # NIMNear Backend
 
-<div align="center">
-
-![NIMNear API Banner](.github/images/banner.png)
-
-![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)
-![Go Version](https://img.shields.io/badge/go-1.26.4-00ADD8?logo=go)
-![License](https://img.shields.io/badge/license-AGPL--v3.0-green.svg)
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)
-![Kafka](https://img.shields.io/badge/kafka-enabled-orange.svg?logo=apache-kafka)
-
-**Enterprise-grade, multi-tenant, RBAC-driven SaaS backend platform built with Go and clean/hexagonal architecture.**
-
-[🚀 Quick Start](#quick-start) • [📚 Documentation](#architecture) • [🔒 Security](#security-hardening) • [🤝 Contributing](CONTRIBUTING.md) • [📄 License](LICENSE)
-
-</div>
-
----
-
-## Architecture
-
-- **Domain-Driven Design** with bounded contexts (IAM, Tenant, API Management, Audit)
-- **Clean Architecture**: domain layer has zero external dependencies
-- **Phase 1 Modular Monolith**: single binary, ready for service extraction
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Language | Go 1.26.4 |
-| HTTP Router | Chi |
-| Database | PostgreSQL 16 (via pgx) |
-| Cache | Redis 7 |
-| Message Queue | Apache Kafka (via segmentio/kafka-go) |
-| Migrations | goose |
-| Auth | JWT (golang-jwt) + bcrypt |
-| Observability | OpenTelemetry + Prometheus |
-| Logging | slog (structured JSON) |
-| Validation | go-playground/validator |
-
-## Quick Start
-
-### Prerequisites
-
-- Go 1.26.4+
-- Docker & Docker Compose
-- (Optional) `goose` CLI for manual migration management
-
-### Option 1: Development Mode (Recommended)
-
-Use the `dev.sh` script for hot-reload development:
-
-```bash
-# Full startup: infrastructure + migrations + hot-reload server
-./dev.sh
-
-# Or step-by-step:
-./dev.sh infra      # Start Docker services + run migrations
-./dev.sh server     # Start hot-reload server (infra must be running)
-```
-
-The `dev.sh` script:
-- ✅ Starts Docker services (Postgres, Redis, Kafka, Kafka UI)
-- ✅ Waits for services to become healthy
-- ✅ Runs database migrations automatically
-- ✅ Starts the server with **hot-reload** (auto-restarts on file changes)
-- ✅ Auto-installs `air` (hot-reload tool) if needed
-
-**Hot-reload**: Edit any `.go` file and save — the server automatically rebuilds and restarts (~3s).
-
-### Option 2: Manual Setup
-
-```bash
-# 1. Start infrastructure
-make docker-up
-
-# 2. Run migrations
-make migrate
-
-# 3. Run server
-make run
-```
-
-The server starts on `http://localhost:8080`.
-
-### Verify
-
-```bash
-curl http://localhost:8080/health/live
-# {"status":"alive"}
-
-curl http://localhost:8080/health/ready
-# {"status":"ready","services":{"postgres":"healthy","redis":"healthy"}}
-# On failure, service entries show "unhealthy" without internal error details
-```
-
-### Development Scripts
-
-```bash
-./dev.sh            # Full startup (infra + migrations + hot-reload)
-./dev.sh server     # Hot-reload server only (skip infra)
-./dev.sh infra      # Start infrastructure only
-./dev.sh migrate    # Run migrations only
-./dev.sh down       # Stop all Docker services
-./dev.sh logs       # Tail Docker service logs
-./dev.sh clean      # Stop infra, remove volumes, clean artifacts
-./dev.sh help       # Show help
-```
-
-## API Endpoints
-
-### Auth (public)
-- `POST /api/v1/auth/register` - Register a new user
-- `POST /api/v1/auth/login` - Login and receive JWT
-
-### Users (authenticated + RBAC)
-- `GET /api/v1/me` - Get current user
-- `GET /api/v1/users` - List users (paginated) — requires `user:read`
-- `GET /api/v1/users/{id}` - Get user by ID — requires `user:read`
-- `POST /api/v1/roles/assign` - Assign role to user — requires `user:write`
-
-### Places (public)
-- `GET /api/v1/places/nearby?lat={latitude}&lng={longitude}&radius={meters}` - List active places ordered by distance; radius defaults to 5,000 meters and is capped at 50,000 meters
-
-### Organizations (authenticated + RBAC)
-- `POST /api/v1/organizations` - Create organization — requires `org:write`
-- `GET /api/v1/organizations` - List organizations — requires `org:read`
-- `GET /api/v1/organizations/{orgId}` - Get organization — requires `org:read`
-
-### Apps (authenticated + RBAC)
-- `POST /api/v1/organizations/{orgId}/apps` - Create app — requires `app:write`
-- `GET /api/v1/organizations/{orgId}/apps` - List apps — requires `app:read`
-- `GET /api/v1/organizations/{orgId}/apps/{appId}` - Get app — requires `app:read`
-
-### API Keys (authenticated + RBAC)
-- `POST /api/v1/organizations/{orgId}/apps/{appId}/keys` - Create API key — requires `app:write`
-- `GET /api/v1/organizations/{orgId}/apps/{appId}/keys` - List API keys — requires `app:read`
-- `DELETE /api/v1/organizations/{orgId}/apps/{appId}/keys/{keyId}` - Revoke key — requires `app:write`
-
-### Endpoints (authenticated + RBAC)
-- `POST /api/v1/organizations/{orgId}/apps/{appId}/endpoints` - Define endpoint — requires `endpoint:write`
-- `GET /api/v1/organizations/{orgId}/apps/{appId}/endpoints` - List endpoints — requires `endpoint:read`
-- `GET /api/v1/organizations/{orgId}/apps/{appId}/endpoints/{endpointId}` - Get endpoint — requires `endpoint:read`
-- `POST /api/v1/organizations/{orgId}/apps/{appId}/endpoints/{endpointId}/retire` - Retire endpoint — requires `endpoint:write`
-- `PUT /api/v1/organizations/{orgId}/apps/{appId}/endpoints/{endpointId}/policy` - Update policy — requires `endpoint:write`
-- `GET /api/v1/organizations/{orgId}/apps/{appId}/endpoints/{endpointId}/policy` - Get policy — requires `endpoint:read`
-
-### Audit Logs (authenticated + RBAC)
-- `GET /api/v1/organizations/{orgId}/audit-logs` - Org audit logs — requires `org:read`
-- `GET /api/v1/users/{userId}/audit-logs` - User audit logs — requires `org:read`
-
-### Observability
-- `GET /health/live` - Liveness probe
-- `GET /health/ready` - Readiness probe
-- `GET /metrics` - Prometheus metrics
-
-### Real-time (WebSocket)
-- `GET /api/v1/ws?token=<jwt>` - WebSocket upgrade for live domain event delivery
-
-**Required headers:** `X-Organization-ID`, `X-App-ID`  
-**Auth:** JWT via `?token=` query parameter (browser-friendly) or `Authorization: Bearer` header  
-**Permission:** `app:read`
-
-```javascript
-const ws = new WebSocket(
-  "ws://localhost:8080/api/v1/ws?token=" + jwt,
-  [],
-);
-// Set headers via a WS client library; browsers require ?token= query param
-```
-
-**Client protocol:**
-
-```json
-{ "action": "subscribe",   "channel": "api-management" }
-{ "action": "unsubscribe", "channel": "tenant" }
-{ "action": "ping" }
-```
-
-**Server push:**
-
-```json
-{
-  "type": "endpoint.created",
-  "topic": "masterfabric.api-management",
-  "organization_id": "uuid",
-  "app_id": "uuid",
-  "data": { ... },
-  "timestamp": "2026-07-03T12:00:00Z"
-}
-```
-
-Architecture details: [`docs/WEBSOCKET.md`](docs/WEBSOCKET.md)
-
-## Postman Collection
-
-A complete Postman collection with **37 requests** and **auto-capturing scripts** is available:
-
-- **Collection**: `postman/nimnear-api.postman_collection.json`
-- **Environment**: `postman/nimnear-api-local.postman_environment.json`
-
-### Features
-
-- ✅ **Auto-capture JWT token** from Login → automatically used in all subsequent requests
-- ✅ **Auto-capture IDs**: `user_id`, `org_id`, `app_id`, `endpoint_id`, `api_key_id` from responses
-- ✅ **Variables persist** across sessions (saved to environment)
-- ✅ **Test assertions** on every request (status codes, response validation)
-- ✅ **Negative test cases** (unauthorized, validation errors, not found)
-
-### Usage
-
-1. Import both files into Postman
-2. Select the **"NIMNear API - Local"** environment
-3. Run **Login** → token is automatically saved
-4. Run **Create Organization** → `org_id` is auto-captured
-5. Run **Create App** → `app_id` is auto-captured
-6. All subsequent requests use the captured variables automatically
-
-**Endpoints covered**: Health, Auth, Users, Organizations, Apps, API Keys, Endpoints, Policies, RBAC, Audit Logs, Error Scenarios, **Invoke Defined Endpoints**.
-
-### How to Use Defined Endpoints
-
-After defining an endpoint (e.g., `POST /orders` or `GET /products`), you can invoke it through the API gateway:
-
-**Required Headers:**
-- `X-App-ID`: Your application ID (triggers gateway pipeline)
-- `X-Organization-ID`: Your organization ID
-- `Authorization: Bearer <jwt_token>`: JWT token for authenticated requests
-
-**Example: Invoke GET /products**
-```http
-GET /api/v1/products
-Headers:
-  X-App-ID: <your-app-id>
-  X-Organization-ID: <your-org-id>
-  Authorization: Bearer <jwt-token>
-```
-
-**Example: Invoke POST /orders**
-```http
-POST /api/v1/orders
-Headers:
-  X-App-ID: <your-app-id>
-  X-Organization-ID: <your-org-id>
-  Authorization: Bearer <jwt-token>
-  Content-Type: application/json
-Body:
-  {
-    "product_id": "prod-123",
-    "quantity": 2
-  }
-```
-
-**Gateway Pipeline Flow:**
-1. Gateway checks `X-App-ID` header
-2. Looks up endpoint by method + path
-3. Validates JSON schema (if defined)
-4. Checks RBAC permissions (if policy requires)
-5. Enforces rate limits
-6. Applies interceptors (PII masking, transformations)
-7. Routes to backend service
-
-See the **"Invoke Defined Endpoints"** section in the Postman collection for complete examples including error scenarios.
-
-## Security Hardening
-
-A full security remediation pass was applied on the `security/hardening` branch. The goal was to close confirmed audit findings across the shared platform layer, HTTP surface, deployment defaults, and authorization coverage — without changing the public API contract.
-
-For the complete trust model, accepted risks, and the **Security Controls Registry v0.1**, see **[SECURITY.md](SECURITY.md)**.
-
-### Why these changes were made
-
-| Area | Problem | Fix | Rationale |
-|------|---------|-----|-----------|
-| **Toolchain & dependencies** | Outdated Go stdlib and library versions carried known CVE advisories | Bumped to **Go 1.26.4**; refreshed pgx, chi, validator, and `golang.org/x/*` modules | Closes upstream vulnerability reports at the root cause rather than patching symptoms |
-| **Container images** | Builder/runtime Go mismatch; EOL Alpine; process ran as root | Aligned builder to Go 1.26.4, runtime to **alpine 3.24**, dedicated **non-root** `appuser` | Reduces container escape blast radius and keeps build/runtime toolchains consistent |
-| **Local compose defaults** | Postgres, Redis, and Kafka exposed on `0.0.0.0` with weak default credentials | Ports bind to **loopback** (`127.0.0.1`) by default via `*_HOST_BIND` env vars | Prevents accidental credential exposure on shared or public networks during local development |
-| **5xx error responses** | `response.Error` returned `err.Error()` verbatim, leaking DB/driver details | Generic client message (`an internal error occurred`); full detail logged server-side | Stops internal infrastructure information from reaching untrusted API consumers (CWE-209) |
-| **Database DSN** | Connection string built with `fmt.Sprintf`, breaking on special characters in passwords | Credentials escaped via **`net/url`** | Prevents credential parsing errors and host/db shifting when passwords contain `@`, `:`, `?`, `#`, or `%` (CWE-116) |
-| **Pagination** | Unbounded `page` query param could overflow into a negative SQL `OFFSET` | `page` clamped to **`MaxPage`** (1,000,000) | Blocks integer overflow that could return unintended rows (CWE-190) |
-| **Config parsing** | `DB_MAX_CONNS` / `DB_MIN_CONNS` cast from `int` to `int32` without bounds check | Dedicated **`envOrDefaultInt32`** with 32-bit parse | Prevents silent truncation flagged by static analysis (gosec G115) |
-| **CORS** | `AllowedOrigins: ["*"]` combined with `AllowCredentials: true` — an invalid and unsafe combination | Configurable **`CORS_ALLOWED_ORIGINS`** allow-list; credentials auto-disabled for wildcard or empty list | Stops browsers from accepting overly permissive cross-origin credential flows (CWE-942) |
-| **Request body size** | No global body limit — large payloads could exhaust server memory | **`MAX_BODY_BYTES`** middleware (default **1 MiB**) using `http.MaxBytesReader` | Mitigates memory exhaustion from oversized JSON uploads (CWE-400) |
-| **Readiness probe** | `/health/ready` echoed raw Postgres/Redis error strings | Returns generic **`unhealthy`** markers; logs detail with `slog` | Health endpoints are often public; they must not disclose hostnames or connection errors (CWE-209) |
-| **Outbound HTTP proxy** | Default `http.Client` followed redirects and had no timeout, risking custom header leakage | **No redirect following**, 30s timeout, response body capped at 1 MiB | Prevents `Authorization` or service tokens from being forwarded across hosts on redirect (CWE-522) |
-| **RBAC coverage** | JWT was required but any authenticated user could call admin routes; wildcard permissions in seed data were not honored | **`RequirePermission`** on all admin routes; wildcard-aware matching (`*`, `org:*`, `*:read`) | Ensures state-changing operations require explicit grants, not just a valid token (CWE-306) |
-| **Migration script** | `migrate.sh create NAME` did not sanitize `NAME`, allowing path traversal in filenames | Name restricted to **`[a-zA-Z0-9_]`** | Blocks `../` injection when migration files are created via automation (CWE-22) |
-| **JWT secret default** | Production could start with `change-me-in-production` | **Fail-closed production validation**; development keeps the documented local default | Prevents production from using a known signing secret while preserving local setup |
-| **Gateway proxy (gosec G704)** | Intentional SSRF sink for operator-configured backend URLs | Documented as an **accepted risk** in SECURITY.md with audited `#nosec` suppressions | Proxying is a core gateway feature; risk is bounded by RBAC on endpoint creation |
-
-### Verification
-
-Run these checks before merging or deploying:
-
-```bash
-go build ./... && go vet ./... && go test ./...
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet ./...
-```
-
-Expected results on the hardened branch:
-
-- All tests pass
-- `govulncheck`: no vulnerabilities found
-- `gosec`: clean (2 intentional, documented suppressions for the gateway HTTP proxy)
-
-### Production checklist
-
-Before exposing the API on a production network:
-
-1. Set **`APP_ENV=production`**; startup rejects unknown or ambiguous environment values
-2. Set a strong, random **`JWT_SECRET`** of at least 32 characters and an explicit **`JWT_ISSUER`**
-3. Set explicit **`CORS_ALLOWED_ORIGINS`** (wildcard and empty origins are rejected)
-4. Set non-default **`DB_HOST`**, **`DB_USER`**, **`DB_PASSWORD`**, and **`DB_NAME`** values
-5. Enable **`DB_SSLMODE=require`** (or stricter)
-6. If Nimiq payment configuration is enabled, use a main-network identifier and a non-local, non-test RPC URL
-7. Restrict **`/metrics`** and **`/health/*`** at the network edge
-
-Production startup fails closed when these requirements are not met. The development defaults below are local-only and are never silently promoted to production.
-
-## Configuration
-
-All configuration is via environment variables. The defaults below preserve local development only; `APP_ENV=production` rejects unsafe/default values before infrastructure initialization:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `APP_ENV` | `development` | Explicit mode: `development`, `test`, or `production` |
-| `SERVER_HOST` | `0.0.0.0` | Bind host |
-| `SERVER_PORT` | `8080` | Bind port |
-| `SERVER_READ_TIMEOUT_SECONDS` | `15` | HTTP read timeout |
-| `SERVER_WRITE_TIMEOUT_SECONDS` | `15` | HTTP write timeout |
-| `SERVER_IDLE_TIMEOUT_SECONDS` | `60` | HTTP idle timeout |
-| `MAX_BODY_BYTES` | `1048576` | Maximum request body size (1 MiB) |
-| `CORS_ALLOWED_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins; credentials disabled when empty or `*` |
-| `DB_HOST` | `localhost` *(development only)* | PostgreSQL host; must be explicit and non-default in production |
-| `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_USER` | `masterfabric` *(development only)* | PostgreSQL user; must be explicit and non-default in production |
-| `DB_PASSWORD` | `masterfabric` *(development only)* | PostgreSQL password; must be explicit and non-default in production |
-| `DB_NAME` | `masterfabric` *(development only)* | PostgreSQL database; must be explicit and non-default in production |
-| `DB_SSLMODE` | `disable` *(development only)* | PostgreSQL SSL mode; production requires TLS such as `require` |
-| `DB_MAX_CONNS` | `25` | PostgreSQL connection pool max size |
-| `DB_MIN_CONNS` | `5` | PostgreSQL connection pool min size |
-| `DB_HOST_BIND` | `127.0.0.1` | Docker Compose host bind for Postgres (dev only) |
-| `REDIS_HOST` | `localhost` | Redis host |
-| `REDIS_PORT` | `6379` | Redis port |
-| `REDIS_HOST_BIND` | `127.0.0.1` | Docker Compose host bind for Redis (dev only) |
-| `KAFKA_ENABLED` | `false` | Enable Kafka event bus |
-| `KAFKA_BROKERS` | `localhost:9092` | Kafka broker addresses (comma-separated) |
-| `KAFKA_GROUP_ID` | `masterfabric-go` | Kafka consumer group ID (legacy compatibility default) |
-| `KAFKA_NUM_PARTITIONS` | `3` | Default partitions for auto-created topics |
-| `KAFKA_REPLICATION_FACTOR` | `1` | Replication factor for auto-created topics |
-| `KAFKA_HOST_BIND` | `127.0.0.1` | Docker Compose host bind for Kafka (dev only) |
-| `JWT_SECRET` | `change-me-in-production` *(development only)* | JWT signing secret; production requires an explicit value of at least 32 characters |
-| `JWT_EXPIRATION_HOURS` | `24` | JWT token lifetime |
-| `JWT_ISSUER` | `masterfabric` *(development only)* | JWT issuer; production requires an explicit non-default value |
-| `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
-| `LOG_FORMAT` | `json` | Log format (json, text) |
-| `WS_ENABLED` | `true` | Enable WebSocket endpoint |
-| `WS_MAX_CONNECTIONS` | `1000` | Maximum concurrent WebSocket connections |
-| `WS_PING_INTERVAL_SECONDS` | `30` | Server ping interval for keepalive |
-| `WS_READ_BUFFER_SIZE` | `1024` | WebSocket read buffer size (bytes) |
-| `WS_WRITE_BUFFER_SIZE` | `1024` | WebSocket write buffer size (bytes) |
-
-## Kafka Event Bus
-
-The project uses an `EventBus` interface (`internal/shared/events/bus.go`) that supports two implementations:
-
-- **In-process bus** (default): channel-based, suitable for local dev and single-instance deployments
-- **Kafka bus**: production-grade, uses `segmentio/kafka-go` with KRaft-mode Kafka (no Zookeeper)
-
-### Enable Kafka
-
-```bash
-# Start infrastructure including Kafka
-make docker-up
-
-# Run with Kafka enabled
-KAFKA_ENABLED=true make run
-```
-
-Kafka UI is available at `http://localhost:8090` for inspecting topics and messages.
-
-### Topics
-
-| Topic | Bounded Context | Events |
-|-------|----------------|--------|
-| `masterfabric.iam` | IAM | user.registered, user.invited, role.assigned, role.revoked |
-| `masterfabric.tenant` | Tenant | organization.created, app.created, app.updated |
-| `masterfabric.api-management` | API Management | endpoint.created, endpoint.updated, endpoint.retired |
-| `masterfabric.audit` | Audit | (consumers write to audit_logs table) |
-
-Topics are auto-created at startup when `KAFKA_ENABLED=true`.
-
-### Publishing Events from Use Cases
-
-**✅ Events are automatically published** from the following use cases:
-
-- `RegisterUseCase` → `user.registered` (TopicIAM)
-- `AssignRoleUseCase` → `role.assigned` (TopicIAM)
-- `CreateOrgUseCase` → `organization.created` (TopicTenant)
-- `CreateAppUseCase` → `app.created` (TopicTenant)
-- `DefineEndpointUseCase` → `endpoint.created` (TopicAPIManagement)
-- `RetireEndpointUseCase` → `endpoint.retired` (TopicAPIManagement)
-
-The `EventBus` is injected into use cases at startup. Events are automatically serialized into JSON envelopes with metadata (ID, type, source, timestamp).
-
-**Example**: When you create an organization via `POST /api/v1/organizations`, the `organization.created` event is published to Kafka topic `masterfabric.tenant`.
-
-**Verify events**: Use Kafka UI at `http://localhost:8090` or consume directly:
-
-```bash
-docker exec masterfabric-kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:29092 \
-  --topic masterfabric.tenant \
-  --from-beginning
-```
-
-### Consuming Events
-
-Register handlers at startup in `main.go`:
-
-```go
-eventBus.Subscribe(events.TopicIAM, func(ctx context.Context, event events.Event) error {
-    log.Info("iam event", "event", event)
-    return nil
-})
-```
-
-## Project Structure
-
-```
-cmd/server/             - Application entry point
-internal/
-  shared/               - Cross-cutting concerns (config, middleware, errors, events)
-  domain/               - Domain layer (entities, interfaces, domain events)
-    iam/                - Identity & Access Management
-    tenant/             - Tenant & App Management
-    apimanagement/      - API Management
-    audit/              - Audit & Observability
-  application/          - Use cases and DTOs
-  infrastructure/       - External implementations (postgres, redis, http)
-  gateway/              - API Gateway policy pipeline
-  domain/realtime/      - WebSocket room model and hub interface
-  infrastructure/websocket/ - In-memory hub, event bridge, session pumps
-deployments/            - Docker and deployment configs
-docs/                   - Architecture documentation (WEBSOCKET.md)
-```
-
-## Scripts
-
-The `scripts/` directory contains utility scripts for common development tasks:
-
-### Database Scripts
-
-```bash
-# Run migrations
-./scripts/migrate.sh up          # Apply all pending migrations
-./scripts/migrate.sh down         # Rollback last migration
-./scripts/migrate.sh status       # Show migration status
-./scripts/migrate.sh create NAME  # Create new migration file
-
-# Seed database with initial data
-go run scripts/seed.go            # Seed roles and permissions
-```
-
-### Testing & Quality
-
-```bash
-# Run tests
-./scripts/test.sh                 # Run all tests
-./scripts/test.sh -cover          # Run with coverage report
-./scripts/test.sh ./path          # Run tests in specific path
-
-# Lint code
-./scripts/lint.sh                 # Check code quality
-./scripts/lint.sh -fix            # Auto-fix issues
-
-# Security scans
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet ./...
-```
-
-## Make Targets
-
-```bash
-make build          # Build binary
-make run            # Run the server
-make test           # Run tests
-make test-cover     # Run tests with coverage
-make lint           # Run linter
-make migrate        # Run migrations up
-make migrate-down   # Rollback last migration
-make docker-up      # Start Docker services (Postgres, Redis, Kafka, Kafka UI)
-make docker-down    # Stop Docker services
-make clean          # Clean build artifacts
-```
-
-**Note**: For development with hot-reload, use `./dev.sh` instead of `make run`.
-
-## License
-
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL v3.0)**.
-
-See the [LICENSE](LICENSE) file for details.
-
-### License Summary
-
-- ✅ **Free to use** for personal and commercial projects
-- ✅ **Modify** and distribute freely
-- ⚠️ **Copyleft**: If you modify and run this software as a network service, you must make your modified source code available to users
-- 📖 **Full License**: See [LICENSE](LICENSE) file
-
-### For Commercial Use
-
-If you need to use this software in a commercial product without the AGPL copyleft requirements, please contact us for licensing options.
-
----
-
-**Copyright © 2025 MasterFabric. All rights reserved.**
-
-
-## NIMNear identity, attribution, and compatibility
-
-This backend is operated and documented as the NIMNear API. The existing clean/hexagonal architecture and infrastructure are retained so current behavior remains intact.
-
-The implementation contains or is derived from open-source software. The upstream AGPL-3.0 license, copyright notices, and attribution in LICENSE are preserved and remain applicable.
-
-The Go module path remains github.com/masterfabric-go/masterfabric until a canonical NIMNear-owned module path is established. Changing it without that decision would invent an ownership path and risk breaking imports for downstream consumers.
-
-Database defaults, Redis key formats, Kafka topic names, and Docker service names retain their historical values for compatibility. Existing values such as masterfabric.* and masterfabric-* are infrastructure compatibility identifiers, not the product identity. Change them only through a deliberate migration.
+The backend is the Go API for the NIMNear Mini App. It is a modular monolith
+with domain code layered over the repository's clean/hexagonal foundation.
+
+## Runtime stack
+
+- Go
+- Chi HTTP router
+- PostgreSQL via pgx
+- Redis for infrastructure/cache/ephemeral concerns
+- Kafka as optional event infrastructure
+- goose-compatible SQL migrations
+- bcrypt and JWT for the current legacy authentication boundary
+- Prometheus metrics and structured logging
+
+The backend also retains tenant, workspace, RBAC, API-management, audit, and
+WebSocket infrastructure from the original platform. Those systems are not
+NIMNear product records and should not be documented as event/catalog data.
+
+## Local development
+
+    cd backend
+    ./dev.sh          # Docker infrastructure, migrations, and development server
+    ./dev.sh infra    # infrastructure only
+    ./dev.sh migrate  # migrations only
+    ./dev.sh server   # server only
+    ./dev.sh down     # stop local services
+
+The normal local API is http://localhost:8080.
+
+    curl http://localhost:8080/health/live
+    curl http://localhost:8080/health/ready
+
+The readiness response checks PostgreSQL and Redis. Local Docker services and
+their credentials are development-only. make seed is an explicit RBAC
+bootstrap helper; startup and migrations do not create application events,
+places, calendars, profiles, purchases, tickets, or demo records.
+
+The latest migration is
+backend/internal/infrastructure/postgres/migrations/00023_payment_reconciliation.sql.
+Migrations through 00023 are the current schema, including places, events,
+participants, profiles, canonical Luna prices, purchases, calendars, event
+calendar association, and payment reconciliation state.
+
+## Environment and fail-closed rules
+
+APP_ENV is development, test, or production and defaults to development for
+the existing local workflow.
+
+- development keeps the documented local PostgreSQL and JWT defaults.
+- test uses isolated test configuration/fixtures and must not depend on
+  production secrets.
+- production rejects missing/default JWT secret or issuer, missing/default
+  database host/user/password/name, non-TLS PostgreSQL mode, invalid ports,
+  empty/wildcard CORS, and unknown environment values before infrastructure
+  initialization.
+
+Payment configuration is optional when all three public settings are absent.
+If enabled, these variables must be supplied together:
+
+- NIMNEAR_NIMIQ_NETWORK
+- NIMNEAR_MERCHANT_ADDRESS
+- NIMNEAR_NIMIQ_RPC_URL
+
+Production payment validation rejects obvious test/local network mixing,
+loopback/local RPC hosts, malformed addresses, and ambiguous network/RPC
+identifiers. No private key is accepted by configuration. Payment routing
+currently remains the global merchant-address design.
+
+The main settings loaded by backend/internal/shared/config/config.go are:
+
+| Area | Variables |
+| --- | --- |
+| Application/server | APP_ENV, SERVER_HOST, SERVER_PORT, SERVER_READ_TIMEOUT_SECONDS, SERVER_WRITE_TIMEOUT_SECONDS, SERVER_IDLE_TIMEOUT_SECONDS, CORS_ALLOWED_ORIGINS, MAX_BODY_BYTES |
+| PostgreSQL | DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE, DB_MAX_CONNS, DB_MIN_CONNS |
+| Redis | REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB |
+| JWT | JWT_SECRET, JWT_EXPIRATION_HOURS, JWT_ISSUER |
+| Kafka | KAFKA_BROKERS, KAFKA_GROUP_ID, KAFKA_ENABLED, KAFKA_NUM_PARTITIONS, KAFKA_REPLICATION_FACTOR |
+| WebSocket | WS_ENABLED, WS_MAX_CONNECTIONS, WS_PING_INTERVAL_SECONDS, WS_READ_BUFFER_SIZE, WS_WRITE_BUFFER_SIZE |
+| Payments | NIMNEAR_PURCHASE_HOLD_MINUTES, NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS, NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES, NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE, plus the three Nimiq variables above |
+| Logging | LOG_LEVEL, LOG_FORMAT |
+
+Validation errors identify configuration variable names only; they do not print
+secret values or full connection strings.
+
+## NIMNear API
+
+### Public
+
+- GET /health/live
+- GET /health/ready
+- GET /metrics
+- POST /api/v1/auth/register — legacy email/password registration.
+- POST /api/v1/auth/login — legacy email/password login and JWT issuance.
+- GET /api/v1/places/nearby?lat={lat}&lng={lng}&radius={meters}
+- GET /api/v1/places/{id}
+- GET /api/v1/events
+- GET /api/v1/events/{id}
+- GET /api/v1/calendars
+- GET /api/v1/calendars/{id}
+- GET /api/v1/profiles/{id}
+- GET /api/v1/profiles/{id}/events?type=organized|attended
+
+GET /api/v1/events returns published public events ordered by starts_at ASC,
+id ASC. With no from or to, the default lower bound is current UTC time.
+limit is 1–100 and defaults to 20. place_id and case-insensitive city filters
+are applied by the API.
+
+Nearby places require latitude and longitude, default to a 5 km radius, cap the
+radius at 50 km, and return active places nearest-first.
+
+### JWT-protected NIMNear operations
+
+- GET /api/v1/me
+- PATCH /api/v1/me/profile
+- POST /api/v1/events
+- GET /api/v1/me/calendars
+- POST /api/v1/calendars
+- POST /api/v1/calendars/{id}/follow
+- DELETE /api/v1/calendars/{id}/follow
+- GET /api/v1/events/{id}/rsvp
+- POST /api/v1/events/{id}/rsvp
+- DELETE /api/v1/events/{id}/rsvp
+- GET /api/v1/events/{id}/purchases/current
+- POST /api/v1/events/{id}/purchases
+- GET /api/v1/purchases/{id}
+- GET /api/v1/purchases/{id}/payment-instructions
+- POST /api/v1/purchases/{id}/transaction
+- GET /api/v1/ws?token=<jwt>
+
+The existing tenant/RBAC/API-management routes are also protected and remain
+available for the platform foundation. They are separate from the NIMNear
+public domain routes.
+
+## Domain contract
+
+Events store price_lunas as an integer. One NIM equals 100,000 Luna.
+price_nim is an edge/request or presentation field and is converted exactly;
+the API rejects excess precision rather than rounding. Optional event fields
+(capacity, image_url, place_id, latitude, longitude, address, organizer_id)
+and optional public profile fields (username, bio, avatar_url) are serialized
+as JSON null when absent.
+
+Event creation is JWT-protected. The authenticated subject becomes organizer_id.
+An active owned calendar or active place may be attached; an active place cannot
+be combined with custom address/coordinates. Empty capacity means unlimited.
+External media is an absolute HTTP(S) URL subject to the current
+length/scheme/control-character validation; no upload/object-storage provider
+or approved-host allowlist exists yet.
+
+Profiles expose only the public profile read model and organized/attended public
+event history. Email, password, JWT claims, and tenant metadata are private.
+PATCH /api/v1/me/profile accepts only display name, username, and plain-text bio
+with stable validation/conflict errors. Avatar mutation is not exposed.
+
+## Payment verification
+
+The current paid flow is:
+
+    JWT-authenticated purchase
+      -> backend derives amount_lunas and global merchant recipient
+      -> frontend receives payment instructions
+      -> Nimiq Pay sendBasicTransaction
+      -> frontend submits only transaction_hash
+      -> backend RPC verifier checks the transfer
+      -> submitted/verifying
+      -> macro-block finality
+      -> confirmed
+
+The verifier checks transaction lookup, exact recipient and amount, basic
+transfer fields, execution result, containing block/network, inclusion, and
+later-batch finality. A reconciliation worker retries submitted/verifying
+purchases with a bounded deterministic batch and deadline. The same owner/hash
+submission is idempotent and a unique database index prevents cross-purchase
+hash replay. Submitted/verifying purchases remain capacity-protected.
+
+The current recipient is NIMNEAR_MERCHANT_ADDRESS. Verified organizer identity,
+organizer recipient snapshots, entitlements, tickets, QR/check-in, refunds,
+payouts, and payment-to-organizer routing are future work. NIMNear does not
+handle private keys.
+
+## Authentication boundary
+
+Native Nimiq Pay connection is implemented in the frontend through explicit
+init() -> listAccounts() interaction and native approval UI. It is account
+permission, not cryptographic backend authentication. The official Mini App
+signature preimage and multi-account signer contract remain unresolved in
+docs/NIMIQ_AUTH_CONTRACT.md; that document is intentionally NO-GO. Legacy
+email/password/JWT infrastructure therefore remains in the backend and is still
+required by protected endpoints.
+
+## Testing
+
+    go test ./...
+    go vet ./...
+
+For frontend validation, see frontend/web/README.md. Manual Postman
+collections are request tooling only; they are not startup seeds.

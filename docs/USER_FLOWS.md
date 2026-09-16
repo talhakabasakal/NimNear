@@ -2,9 +2,9 @@
 
 ## Status
 
-The flows below are limited to screens and navigation visibly confirmed in the connected NIMNear Figma Make file.
+The flows below distinguish Figma-confirmed visual references from behavior confirmed in the current repository.
 
-Do not infer missing screens or hidden transitions from this document.
+Do not infer missing screens or hidden transitions from this document. The Istanbul/city composition is a Figma visual reference; the runtime does not assume Istanbul as a location fallback.
 
 ## Confirmed Screens
 
@@ -135,7 +135,7 @@ Do not add routes, tabs, or transitions for these flows based only on the mentio
 The implemented event detail page supports the following backend-confirmed behavior:
 
 - Free upcoming events expose Katıl for authenticated users.
-- Anonymous users use the existing login/register flow before participation.
+- Users with an existing backend JWT can participate. A native Nimiq connection without that JWT is shown as a blocked protected action; listAccounts() is not treated as authentication.
 - An attending user sees the attending state and can choose Katılımı iptal et.
 - Capacity-limited events show the current count and a disabled Tükendi state when full.
 - Past events do not expose an RSVP action.
@@ -150,7 +150,7 @@ Participation is user-specific and does not imply invitations, payments, tickets
 The confirmed Profile screen is now connected to the first backend profile read model:
 
 1. App header profile control opens /profile.
-2. Anonymous users see the existing authentication panel.
+2. Users without a legacy backend JWT see native Nimiq connection plus an explicit protected-action limitation.
 3. An authenticated user sees the real display name, optional profile fields, join date, organized/attended counts, and event history.
 4. Public profiles are available at /profiles/[id] when linked from an event organizer block.
 5. Organized and attended lists use empty and API error states when no records or data are available.
@@ -162,7 +162,7 @@ Profile editing is available only to the authenticated owner at `/profile/edit`.
 The implemented paid-event flow stops after confirmed purchase:
 
 1. An upcoming paid event shows Satın al; past and sold-out events do not offer a purchase action.
-2. An anonymous user sees the existing login/register panel.
+2. A native-only user can connect Nimiq Pay, but the protected purchase remains unavailable until the verified Nimiq-to-JWT bridge exists; an existing backend JWT is required.
 3. An authenticated user creates or reuses a server-owned pending purchase.
 4. The frontend retrieves backend-authoritative recipient, exact Luna amount, and network.
 5. Nimiq Pay requests user confirmation through sendBasicTransaction.

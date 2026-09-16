@@ -12,8 +12,7 @@ Frontend source: `frontend/web`
 - Tailwind CSS
 - shadcn/ui
 - @nimiq/mini-app-sdk
-- qrcode
-- html5-qrcode
+- qrcode and html5-qrcode are installed dependencies for future/isolated ticket or check-in surfaces; no ticket or QR product flow is currently exposed.
 
 ## Primary Environment
 
@@ -43,7 +42,21 @@ Use the Next.js App Router.
 
 Prefer server components unless a component needs browser-only behavior or interactivity.
 
-Use `"use client"` only where required.
+Use "use client" only where required.
+
+## Current route tree
+
+- /
+- /events
+- /events?view=past
+- /events/[id]
+- /events/create
+- /places/[id]
+- /calendars
+- /calendars/[id]
+- /profile
+- /profiles/[id]
+- /profile/edit
 
 
 ### Calendar discovery
@@ -196,6 +209,8 @@ Nimiq browser/WebView integrations should be placed in client components or clie
 
 Do not implement custom private-key storage.
 
+The current legacy JWT compatibility session is stored in browser sessionStorage by the existing auth API module. This is technical debt retained for protected operations; it is not a native Nimiq identity and must not be treated as one. Native listAccounts() success does not populate this session.
+
 ## Quality
 
 Before considering a frontend task complete:
@@ -247,7 +262,7 @@ The event detail page uses the typed participation API layer for:
 - POST /api/v1/events/{id}/rsvp
 - DELETE /api/v1/events/{id}/rsvp
 
-The page restores the existing session through /api/v1/me before loading user-specific RSVP state. Anonymous users see the existing login/register panel. Authenticated users can join or cancel a free upcoming event, with a pending state that prevents duplicate clicks. The participation response updates the attendee count, sold-out state, and CTA presentation.
+The page restores the existing legacy JWT session through /api/v1/me before loading user-specific RSVP state. Users without that JWT see native Nimiq connection plus an explicit blocked protected-action state; listAccounts() is not authentication. JWT-authenticated users can join or cancel a free upcoming event, with a pending state that prevents duplicate clicks. The participation response updates the attendee count, sold-out state, and CTA presentation.
 
 Paid events do not show an RSVP action; they use the separate authenticated Nimiq Pay purchase component. Past events do not show an RSVP action, and sold-out events render a disabled state unless the current user is already attending and needs to cancel.
 
@@ -288,7 +303,7 @@ Paid future events use the existing event-detail sidebar and a restrained EventP
 - For phone-based local validation, the frontend API URL must be reachable from the device (for example, a LAN address rather than localhost), and the backend CORS configuration must allow the Mini App origin.
 - A recognizable wallet rejection is rendered as a normal retryable state and never submitted as payment.
 - The returned transaction hash is sent to POST /api/v1/purchases/{id}/transaction. The UI shows submitted/verifying until the backend returns confirmed.
-- Refresh/reopen recovery uses the authenticated current-purchase endpoint and persisted backend state. Polling is bounded and has no background worker.
+- Refresh/reopen recovery uses the authenticated current-purchase endpoint and persisted backend state. Polling is bounded, and the backend reconciliation worker retries submitted/verifying purchases independently of the browser.
 - Confirmed UI stops at the purchase confirmation message. Ticket, QR, checkout, refund, and booking actions are not implemented.
 
 The paid component is client-side because the Mini App provider is browser/WebView-only. It does not handle keys, secrets, or production funds.

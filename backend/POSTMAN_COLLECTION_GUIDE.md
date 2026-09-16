@@ -1,5 +1,7 @@
 # Postman Collection - Endpoints & Scenarios Guide
 
+> Scope note: this is manual tooling for the retained IAM, tenant, RBAC, API-management, audit, and managed-gateway infrastructure. It is not the NIMNear event/place/calendar/profile/RSVP/purchase API guide. The /products and /orders examples are managed endpoint examples that require explicit endpoint definitions; they are not built-in NIMNear records. Register/login requests use the legacy email/password JWT compatibility boundary. Use only against an isolated development database and never place production credentials in the collection or environment.
+
 This document provides a complete overview of all endpoints and test scenarios available in the NIMNear Go Postman collection.
 
 ## Collection Structure

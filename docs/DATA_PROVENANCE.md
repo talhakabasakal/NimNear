@@ -1,6 +1,6 @@
 # NIMNear Data Provenance
 
-This document records where every user-facing dynamic value comes from and defines the boundary between application records, static interface content, and test/development tooling. It reflects the repository after finalization task A6.
+This document records where every user-facing dynamic value comes from and defines the boundary between application records, static interface content, and test/development tooling. It reflects the repository after finalization tasks A1–A8 and the A9 documentation alignment pass.
 
 ## Runtime policy
 
@@ -170,9 +170,9 @@ The following are intentionally retained and are not represented as live records
 
 None of these surfaces supplies fake event, profile, attendee, payment, ticket, or location API records.
 
-## A3 verification contract
+## Current provenance verification checklist
 
-A3 is complete when all of the following continue to hold:
+The current provenance contract remains valid when all of the following continue to hold:
 
 1. `/api/v1/products` returns 404 and cannot expose the removed sample products.
 2. Normal startup and migrations do not create product records.
