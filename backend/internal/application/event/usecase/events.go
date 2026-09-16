@@ -11,9 +11,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterfabric-go/masterfabric/internal/application/event/dto"
+	calendarModel "github.com/masterfabric-go/masterfabric/internal/domain/calendar/model"
+	calendarRepo "github.com/masterfabric-go/masterfabric/internal/domain/calendar/repository"
 	"github.com/masterfabric-go/masterfabric/internal/domain/event/model"
 	"github.com/masterfabric-go/masterfabric/internal/domain/event/repository"
+	placeRepo "github.com/masterfabric-go/masterfabric/internal/domain/place/repository"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
+	"github.com/masterfabric-go/masterfabric/internal/shared/validator"
 )
 
 const (
@@ -27,13 +31,30 @@ const LunasPerNIM int64 = 100000
 
 // EventUseCase handles public event discovery and authenticated creation.
 type EventUseCase struct {
-	eventRepo repository.EventRepository
-	now       func() time.Time
+	eventRepo    repository.EventRepository
+	placeRepo    placeRepo.PlaceRepository
+	calendarRepo calendarRepo.CalendarRepository
+	now          func() time.Time
 }
 
 // NewEventUseCase creates an event use case using the system clock.
 func NewEventUseCase(eventRepo repository.EventRepository) *EventUseCase {
-	return &EventUseCase{eventRepo: eventRepo, now: func() time.Time { return time.Now().UTC() }}
+	return newEventUseCase(eventRepo, nil, nil)
+}
+
+// NewEventUseCaseWithAssociations wires the repositories needed to validate
+// optional place and calendar associations during event creation.
+func NewEventUseCaseWithAssociations(eventRepo repository.EventRepository, places placeRepo.PlaceRepository, calendars calendarRepo.CalendarRepository) *EventUseCase {
+	return newEventUseCase(eventRepo, places, calendars)
+}
+
+func newEventUseCase(eventRepo repository.EventRepository, places placeRepo.PlaceRepository, calendars calendarRepo.CalendarRepository) *EventUseCase {
+	return &EventUseCase{
+		eventRepo:    eventRepo,
+		placeRepo:    places,
+		calendarRepo: calendars,
+		now:          func() time.Time { return time.Now().UTC() },
+	}
 }
 
 // List returns public events. With no time window it defaults to upcoming events.
@@ -60,10 +81,11 @@ func (uc *EventUseCase) List(ctx context.Context, query dto.ListEventsQuery) (*d
 	}
 
 	events, err := uc.eventRepo.ListPublic(ctx, repository.ListFilter{
-		City:  query.City,
-		From:  query.From,
-		To:    query.To,
-		Limit: query.Limit,
+		City:    query.City,
+		PlaceID: query.PlaceID,
+		From:    query.From,
+		To:      query.To,
+		Limit:   query.Limit,
 	})
 	if err != nil {
 		return nil, err
@@ -105,6 +127,9 @@ func (uc *EventUseCase) Create(ctx context.Context, organizerID uuid.UUID, req d
 	if uc.eventRepo == nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "event repository is not configured", nil)
 	}
+	if err := uc.validateAssociations(ctx, organizerID, req); err != nil {
+		return nil, err
+	}
 	event, err := buildEvent(organizerID, req)
 	if err != nil {
 		return nil, err
@@ -113,6 +138,37 @@ func (uc *EventUseCase) Create(ctx context.Context, organizerID uuid.UUID, req d
 		return nil, err
 	}
 	return &dto.EventResponse{Data: MapEvent(event, uc.now().UTC())}, nil
+}
+
+func (uc *EventUseCase) validateAssociations(ctx context.Context, organizerID uuid.UUID, req dto.CreateEventRequest) error {
+	if req.PlaceID != nil {
+		if uc.placeRepo == nil {
+			return domainErr.New(domainErr.ErrInternal, "place service is not configured", nil)
+		}
+		if req.Address != nil || req.Latitude != nil || req.Longitude != nil {
+			return domainErr.New(domainErr.ErrValidation, "place_id cannot be combined with custom address or coordinates", nil)
+		}
+		place, err := uc.placeRepo.GetActiveByID(ctx, *req.PlaceID)
+		if err != nil {
+			return err
+		}
+		if place == nil {
+			return domainErr.New(domainErr.ErrNotFound, "place not found", nil)
+		}
+	}
+	if req.CalendarID != nil {
+		if uc.calendarRepo == nil {
+			return domainErr.New(domainErr.ErrInternal, "calendar service is not configured", nil)
+		}
+		calendar, err := uc.calendarRepo.GetByID(ctx, *req.CalendarID)
+		if err != nil {
+			return err
+		}
+		if calendar == nil || calendar.OwnerID != organizerID || calendar.Status != calendarModel.StatusActive {
+			return domainErr.New(domainErr.ErrForbidden, "calendar is not owned by the authenticated organizer", nil)
+		}
+	}
+	return nil
 }
 
 func buildEvent(organizerID uuid.UUID, req dto.CreateEventRequest) (*model.Event, error) {
@@ -153,8 +209,8 @@ func buildEvent(organizerID uuid.UUID, req dto.CreateEventRequest) (*model.Event
 	if req.Address != nil && len(*req.Address) > 500 {
 		return nil, domainErr.New(domainErr.ErrValidation, "address must be no more than 500 characters", nil)
 	}
-	if len(req.ImageURL) > 2048 {
-		return nil, domainErr.New(domainErr.ErrValidation, "image_url must be no more than 2048 characters", nil)
+	if !validator.ValidMediaURL(req.ImageURL) {
+		return nil, domainErr.New(domainErr.ErrValidation, "image_url must be an absolute HTTP(S) URL of no more than 2048 characters", nil)
 	}
 
 	now := time.Now().UTC()
@@ -170,6 +226,7 @@ func buildEvent(organizerID uuid.UUID, req dto.CreateEventRequest) (*model.Event
 		Capacity:      req.Capacity,
 		AttendeeCount: 0,
 		ImageURL:      req.ImageURL,
+		CalendarID:    req.CalendarID,
 		PlaceID:       req.PlaceID,
 		Latitude:      req.Latitude,
 		Longitude:     req.Longitude,
@@ -194,12 +251,13 @@ func MapEvent(event *model.Event, now time.Time) dto.EventInfo {
 		Currency:      event.Currency,
 		Capacity:      event.Capacity,
 		AttendeeCount: event.AttendeeCount,
-		ImageURL:      event.ImageURL,
+		ImageURL:      optionalMediaURL(event.ImageURL),
 		PlaceID:       event.PlaceID,
 		Latitude:      event.Latitude,
 		Longitude:     event.Longitude,
 		Address:       event.Address,
 		City:          event.City,
+		CalendarID:    event.CalendarID,
 		OrganizerID:   event.OrganizerID,
 		IsFree:        event.IsFree(),
 		IsSoldOut:     event.IsSoldOut(),
@@ -271,4 +329,11 @@ func validateCoordinates(latitude, longitude *float64) error {
 		return domainErr.New(domainErr.ErrValidation, "longitude must be between -180 and 180", nil)
 	}
 	return nil
+}
+
+func optionalMediaURL(value string) *string {
+	if !validator.ValidMediaURL(value) || value == "" {
+		return nil
+	}
+	return &value
 }

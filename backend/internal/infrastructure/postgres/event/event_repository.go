@@ -32,6 +32,10 @@ func (r *EventRepo) ListPublic(ctx context.Context, filter repository.ListFilter
 		args = append(args, filter.City)
 		where += fmt.Sprintf(" AND LOWER(city) = LOWER($%d)", len(args))
 	}
+	if filter.PlaceID != nil {
+		args = append(args, *filter.PlaceID)
+		where += fmt.Sprintf(" AND place_id = $%d", len(args))
+	}
 	if filter.From != nil {
 		args = append(args, *filter.From)
 		where += fmt.Sprintf(" AND starts_at >= $%d", len(args))
@@ -45,7 +49,7 @@ func (r *EventRepo) ListPublic(ctx context.Context, filter repository.ListFilter
 	args = append(args, filter.Limit)
 	query := fmt.Sprintf(`
 		SELECT id, title, description, starts_at, ends_at, status, price_lunas,
-		       currency, capacity, attendee_count, image_url, place_id,
+		       currency, capacity, attendee_count, image_url, calendar_id, place_id,
 		       latitude, longitude, address, city, organizer_id, is_public,
 		       created_at, updated_at
 		FROM events
@@ -77,7 +81,7 @@ func (r *EventRepo) ListPublic(ctx context.Context, filter repository.ListFilter
 func (r *EventRepo) ListPublicByOrganizer(ctx context.Context, organizerID uuid.UUID) ([]*model.Event, error) {
 	rows, err := r.db.Query(ctx,
 		"SELECT id, title, description, starts_at, ends_at, status, price_lunas, "+
-			"currency, capacity, attendee_count, image_url, place_id, latitude, longitude, "+
+			"currency, capacity, attendee_count, image_url, calendar_id, place_id, latitude, longitude, "+
 			"address, city, organizer_id, is_public, created_at, updated_at "+
 			"FROM events WHERE organizer_id = $1 AND is_public = TRUE AND status = 'published' "+
 			"ORDER BY starts_at ASC, id ASC", organizerID)
@@ -92,13 +96,30 @@ func (r *EventRepo) ListPublicByOrganizer(ctx context.Context, organizerID uuid.
 func (r *EventRepo) ListPublicByAttendee(ctx context.Context, userID uuid.UUID) ([]*model.Event, error) {
 	rows, err := r.db.Query(ctx,
 		"SELECT e.id, e.title, e.description, e.starts_at, e.ends_at, e.status, e.price_lunas, "+
-			"e.currency, e.capacity, e.attendee_count, e.image_url, e.place_id, e.latitude, e.longitude, "+
+			"e.currency, e.capacity, e.attendee_count, e.image_url, e.calendar_id, e.place_id, e.latitude, e.longitude, "+
 			"e.address, e.city, e.organizer_id, e.is_public, e.created_at, e.updated_at "+
 			"FROM events e JOIN event_participants ep ON ep.event_id = e.id "+
 			"WHERE ep.user_id = $1 AND e.is_public = TRUE AND e.status = 'published' "+
 			"ORDER BY e.starts_at ASC, e.id ASC", userID)
 	if err != nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to list attended events", err)
+	}
+	defer rows.Close()
+	return collectEvents(rows)
+}
+
+// ListPublicByCalendar returns published public events associated with a public calendar.
+func (r *EventRepo) ListPublicByCalendar(ctx context.Context, calendarID uuid.UUID) ([]*model.Event, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, title, description, starts_at, ends_at, status, price_lunas,
+		       currency, capacity, attendee_count, image_url, calendar_id, place_id,
+		       latitude, longitude, address, city, organizer_id, is_public,
+		       created_at, updated_at
+		FROM events
+		WHERE calendar_id = $1 AND is_public = TRUE AND status = 'published'
+		ORDER BY starts_at ASC, id ASC`, calendarID)
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to list calendar events", err)
 	}
 	defer rows.Close()
 	return collectEvents(rows)
@@ -123,7 +144,7 @@ func collectEvents(rows pgx.Rows) ([]*model.Event, error) {
 func (r *EventRepo) GetPublicByID(ctx context.Context, id uuid.UUID) (*model.Event, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, title, description, starts_at, ends_at, status, price_lunas,
-		       currency, capacity, attendee_count, image_url, place_id,
+		       currency, capacity, attendee_count, image_url, calendar_id, place_id,
 		       latitude, longitude, address, city, organizer_id, is_public,
 		       created_at, updated_at
 		FROM events
@@ -144,10 +165,10 @@ func (r *EventRepo) Create(ctx context.Context, event *model.Event) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO events (
 			id, title, description, starts_at, ends_at, status, price_lunas,
-			currency, capacity, attendee_count, image_url, place_id,
+			currency, capacity, attendee_count, image_url, calendar_id, place_id,
 			latitude, longitude, address, city, organizer_id, is_public,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		event.ID,
 		event.Title,
 		event.Description,
@@ -159,6 +180,7 @@ func (r *EventRepo) Create(ctx context.Context, event *model.Event) error {
 		event.Capacity,
 		event.AttendeeCount,
 		event.ImageURL,
+		event.CalendarID,
 		event.PlaceID,
 		event.Latitude,
 		event.Longitude,
@@ -182,6 +204,7 @@ type rowScanner interface {
 func scanEvent(row rowScanner) (*model.Event, error) {
 	var (
 		event       model.Event
+		calendarID  pgtype.UUID
 		placeID     pgtype.UUID
 		latitude    pgtype.Float8
 		longitude   pgtype.Float8
@@ -200,6 +223,7 @@ func scanEvent(row rowScanner) (*model.Event, error) {
 		&event.Capacity,
 		&event.AttendeeCount,
 		&event.ImageURL,
+		&calendarID,
 		&placeID,
 		&latitude,
 		&longitude,
@@ -213,6 +237,10 @@ func scanEvent(row rowScanner) (*model.Event, error) {
 		return nil, err
 	}
 
+	if calendarID.Valid {
+		id := uuid.UUID(calendarID.Bytes)
+		event.CalendarID = &id
+	}
 	if placeID.Valid {
 		id := uuid.UUID(placeID.Bytes)
 		event.PlaceID = &id

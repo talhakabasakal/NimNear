@@ -7,7 +7,7 @@ type ParticipationInfo struct {
 	EventID       uuid.UUID `json:"event_id"`
 	Attending     bool      `json:"attending"`
 	AttendeeCount int       `json:"attendee_count"`
-	Capacity      *int      `json:"capacity,omitempty"`
+	Capacity      *int      `json:"capacity"`
 	IsSoldOut     bool      `json:"is_sold_out"`
 }
 

@@ -31,6 +31,7 @@ type Event struct {
 	Capacity      *int        `json:"capacity,omitempty"`
 	AttendeeCount int         `json:"attendee_count"`
 	ImageURL      string      `json:"image_url"`
+	CalendarID    *uuid.UUID  `json:"calendar_id,omitempty"`
 	PlaceID       *uuid.UUID  `json:"place_id,omitempty"`
 	Latitude      *float64    `json:"latitude,omitempty"`
 	Longitude     *float64    `json:"longitude,omitempty"`

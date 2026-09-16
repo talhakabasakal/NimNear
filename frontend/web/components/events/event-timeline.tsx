@@ -1,4 +1,5 @@
 import type { EventRecord } from "@/lib/api/events";
+import { resolveCollectionState } from "@/lib/collection-state";
 
 import { StateCard } from "@/components/app/state-card";
 
@@ -12,10 +13,11 @@ type EventTimelineProps = {
 const dateFormatter = new Intl.DateTimeFormat("tr-TR", { weekday: "long", day: "numeric", month: "long" });
 
 export function EventTimeline({ events, error }: EventTimelineProps) {
-  if (error) return <StateCard kind="error" title="Etkinlikler yüklenemedi" description="Etkinlik servisine şu anda ulaşılamıyor." />;
-  if (events.length === 0) return <StateCard kind="empty" title="Bu dönemde etkinlik yok" description="Başka bir zaman aralığı seçerek tekrar deneyebilirsin." />;
+  const state = resolveCollectionState(events, error);
+  if (state.kind === "error") return <StateCard kind="error" title="Etkinlikler yüklenemedi" description="Etkinlik servisine şu anda ulaşılamıyor." />;
+  if (state.kind === "empty") return <StateCard kind="empty" title="Bu dönemde etkinlik yok" description="Başka bir zaman aralığı seçerek tekrar deneyebilirsin." />;
 
-  const groups = events.reduce<Record<string, EventRecord[]>>((result, event) => {
+  const groups = state.records.reduce<Record<string, EventRecord[]>>((result, event) => {
     const key = new Date(event.starts_at).toISOString().slice(0, 10);
     result[key] ??= [];
     result[key].push(event);

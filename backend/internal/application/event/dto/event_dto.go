@@ -8,10 +8,11 @@ import (
 
 // ListEventsQuery contains the supported public event discovery filters.
 type ListEventsQuery struct {
-	City  string
-	From  *time.Time
-	To    *time.Time
-	Limit int
+	City    string
+	PlaceID *uuid.UUID
+	From    *time.Time
+	To      *time.Time
+	Limit   int
 }
 
 // CreateEventRequest is the authenticated event creation contract.
@@ -26,6 +27,7 @@ type CreateEventRequest struct {
 	Currency    string     `json:"currency"`
 	Capacity    *int       `json:"capacity,omitempty"`
 	ImageURL    string     `json:"image_url"`
+	CalendarID  *uuid.UUID `json:"calendar_id,omitempty"`
 	PlaceID     *uuid.UUID `json:"place_id,omitempty"`
 	Latitude    *float64   `json:"latitude,omitempty"`
 	Longitude   *float64   `json:"longitude,omitempty"`
@@ -43,15 +45,16 @@ type EventInfo struct {
 	Status        string     `json:"status"`
 	PriceNIM      string     `json:"price_nim"`
 	Currency      string     `json:"currency"`
-	Capacity      *int       `json:"capacity,omitempty"`
+	Capacity      *int       `json:"capacity"`
 	AttendeeCount int        `json:"attendee_count"`
-	ImageURL      string     `json:"image_url"`
-	PlaceID       *uuid.UUID `json:"place_id,omitempty"`
-	Latitude      *float64   `json:"latitude,omitempty"`
-	Longitude     *float64   `json:"longitude,omitempty"`
-	Address       *string    `json:"address,omitempty"`
+	ImageURL      *string    `json:"image_url"`
+	CalendarID    *uuid.UUID `json:"calendar_id"`
+	PlaceID       *uuid.UUID `json:"place_id"`
+	Latitude      *float64   `json:"latitude"`
+	Longitude     *float64   `json:"longitude"`
+	Address       *string    `json:"address"`
 	City          string     `json:"city"`
-	OrganizerID   *uuid.UUID `json:"organizer_id,omitempty"`
+	OrganizerID   *uuid.UUID `json:"organizer_id"`
 	IsFree        bool       `json:"is_free"`
 	IsSoldOut     bool       `json:"is_sold_out"`
 	IsPast        bool       `json:"is_past"`

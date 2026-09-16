@@ -16,4 +16,4 @@ npm run lint
 npm run build
 ```
 
-The current page is intentionally a temporary migration check. Product UI and Figma-driven styling will be added separately.
+User-facing product records are loaded from the NIMNear backend APIs. Static copy, navigation labels, design tokens, loading skeletons, neutral media fallbacks, and explicitly labeled editorial catalog content are not application records. See `../../docs/DATA_PROVENANCE.md` for the route-by-route contract.

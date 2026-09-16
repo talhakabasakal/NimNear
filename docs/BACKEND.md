@@ -79,6 +79,18 @@ Never hardcode passwords, JWT secrets, API keys, production URLs or credentials.
 
 Local secrets belong in ignored environment files.
 
+### Environment modes and production validation
+
+`APP_ENV` explicitly selects `development`, `test`, or `production`; an unknown value fails configuration validation. It defaults to `development` so the existing `backend/dev.sh` and local Docker workflow continue to work.
+
+- `development`: documented local defaults remain available, including the local PostgreSQL credentials and development JWT defaults.
+- `test`: tests may use isolated explicit fixtures and do not depend on production secrets.
+- `production`: startup fails before infrastructure initialization if JWT secret/issuer, database host/user/password/name, TLS mode, or CORS origins are missing or still using known development defaults. Empty or wildcard CORS origins are rejected. Database connection failure also stops production startup; it does not downgrade to an in-memory/no-database mode.
+
+Payment configuration remains optional as before. When enabled in production, the existing `NIMNEAR_NIMIQ_NETWORK`, `NIMNEAR_MERCHANT_ADDRESS`, and `NIMNEAR_NIMIQ_RPC_URL` settings must be complete, must identify the production main network, and must not use local or obvious test-network RPC URLs. This is an environment-safety check only; payment routing is unchanged.
+
+Validation errors contain configuration variable names and remediation guidance, never secret values or full connection strings.
+
 ## API Design
 
 NIMNear endpoints should follow the existing backend routing conventions.
@@ -118,8 +130,8 @@ The first NIMNear Events slice is backed by migration 00014_create_events.sql.
 It adds a PostgreSQL events table with:
 
 - event title, description, start/end timestamps, and lifecycle status (draft, published, or cancelled);
-- exact price_nim storage as NUMERIC(20,8), represented as a decimal string in Go and JSON;
-- optional capacity, attendee count, image, place relation, coordinates, address, and organizer relation;
+- canonical integer `price_lunas` storage; one NIM is exactly 100,000 Luna;
+- optional capacity, attendee count, image, calendar/place relations, coordinates, address, and organizer relation;
 - city, public visibility, and created/updated timestamps.
 
 upcoming, past, sold out, and free are response-level derived values. invited is intentionally not an event-wide status; it requires a future user-specific invitation domain.
@@ -131,6 +143,7 @@ GET /api/v1/events returns a { "data": [...] } envelope containing only public, 
 Supported query parameters:
 
 - city: case-insensitive city match;
+- place_id: optional stable public place UUID;
 - from: optional RFC3339 lower bound for starts_at;
 - to: optional RFC3339 upper bound for starts_at;
 - limit: optional integer from 1 to 100, default 20.
@@ -139,13 +152,38 @@ When neither from nor to is supplied, the lower bound defaults to the current UT
 
 GET /api/v1/events/{id} returns one public, published event or 404.
 
+
+### Public calendar discovery
+
+The calendar domain is backed by migrations `00021_create_calendars.sql` and `00022_add_event_calendar.sql`. `GET /api/v1/calendars` returns only active, public calendars in deterministic `created_at ASC, id ASC` order. `GET /api/v1/calendars/{id}` returns one active public calendar and its published, public events in chronological `starts_at ASC, id ASC` order. Empty collections are returned as empty arrays; no calendar seed data is created.
+
+Calendar ownership and follows are protected by the existing JWT middleware. `GET /api/v1/me/calendars` returns the authenticated user’s owned and followed calendars. `POST /api/v1/calendars`, `POST /api/v1/calendars/{id}/follow`, and `DELETE /api/v1/calendars/{id}/follow` require the legacy backend JWT. Follow insertion is idempotent and unfollow is safely repeatable. Private and archived calendars are excluded from public reads.
+
+Calendar DTOs expose stable IDs, name, visibility, timestamps, and optional description/image fields as explicit JSON `null` when absent. Owner IDs and follower data are not exposed through public calendar reads. Nimiq `listAccounts()` does not authorize calendar mutations; native Nimiq authentication remains blocked pending the verified signature-to-JWT contract.
+
+### Public place discovery
+
+`GET /api/v1/places/nearby?lat={latitude}&lng={longitude}&radius={meters}` returns a `{ "data": [...] }` envelope containing only active places. Latitude and longitude are validated, radius defaults to 5,000 meters and is capped at 50,000 meters, and results use Haversine distance with nearest-first ordering. An empty result is a successful empty `data` array.
+
+`GET /api/v1/places/{id}` returns one active place by its stable UUID or 404. The public DTO contains only place identity, description, coordinates, address, category, and image URL; inactive places are not exposed.
+
+Public event discovery accepts `place_id` and applies that filter in PostgreSQL before chronological ordering. The frontend does not fetch all events and filter them locally. No city taxonomy or place seed data is created by migrations or startup; city-level aggregation remains unsupported until a product decision defines it.
+
 ### Event creation
 
 POST /api/v1/events is inside the existing JWT-protected route group. The authenticated JWT user becomes organizer_id; the endpoint creates a published public event. It validates title, timestamps, time ordering, decimal price, capacity, coordinate pairing/ranges, city, address, and image URL length.
 
-The request uses a string price_nim value, for example "12.5", so clients do not pass money through a floating-point type. Empty or omitted price means free ("0").
+The request uses the existing string `price_nim` edge field, for example `"12.5"`, so clients do not pass money through a floating-point type. The use case converts it exactly to integer Luna; more than five fractional decimal places are rejected rather than rounded. Empty or `"0"` means a free event. `calendar_id` may reference only an active calendar owned by the authenticated organizer. `place_id` must reference an active place; it cannot be combined with custom address or coordinates. With no `place_id`, custom address and a complete coordinate pair are optional.
 
-Payments, tickets, QR codes, calendars, notifications, subscriptions, and user-specific invitations are not implemented by this domain slice.
+### Optional response fields and external media
+
+Public event and profile responses use explicit JSON `null` for absent optional fields. Fields are not omitted. For events this applies to `capacity`, `image_url`, `place_id`, `latitude`, `longitude`, `address`, and `organizer_id`. For profiles this applies to `username`, `bio`, and `avatar_url`. Required fields such as event `city`, profile `display_name`, timestamps, status, and counts remain present with their documented non-null types. The database keeps its existing nullable and empty-string storage semantics; response mapping provides the stable API contract. RSVP responses also return `capacity: null` when capacity is unlimited.
+
+External event media accepts either an empty value or an absolute `http://` or `https://` URL no longer than 2,048 bytes. Malformed URLs, URL credentials, whitespace/control characters, and `javascript:`, `data:`, `file:`, and other schemes are rejected at event creation. Public response mapping suppresses invalid legacy event/profile media values as `null`. Profile avatar mutation is not currently exposed, so there is no avatar write boundary in this release.
+
+There is no approved media host allowlist or first-party object storage provider. Host allowlisting, upload validation, object lifecycle management, and a matching restrictive browser `img-src` policy remain future hardening work once that infrastructure is selected.
+
+Payments, tickets, QR codes, notifications, subscriptions, and user-specific invitations are not implemented by this domain slice. Public calendars and their optional event association are implemented by the calendar domain.
 
 
 ## Event participation / RSVP
@@ -166,7 +204,7 @@ POST is idempotent for an existing participation. DELETE cancels only the authen
 
 The event_participants join table has a unique (event_id, user_id) constraint and indexes for event and user lookup. RSVP operations lock the event row inside a PostgreSQL transaction, check the actual join-row count, insert or delete the participation, and synchronize events.attendee_count in the same transaction. This prevents concurrent RSVPs from exceeding capacity while retaining the existing denormalized count for public discovery.
 
-Invitations, payments, tickets, QR codes, calendars, notifications, and waitlists remain unsupported.
+Invitations, payments, tickets, QR codes, notifications, and waitlists remain unsupported. Calendar creation/follow mutations use the existing legacy JWT until native Nimiq authentication is available.
 
 
 
@@ -208,3 +246,7 @@ The paid-event flow stops at a confirmed purchase. It does not issue tickets or 
 - Once a hash is accepted, the capacity hold is pinned by clearing its expiry and counting submitted/verifying purchases as active. An invalid verified transaction moves to failed and releases capacity. There is no refund or automatic resolution for a transaction that remains unresolved indefinitely; that operational policy remains a product decision.
 - Configuration is optional in local environments and becomes active only when all three public settings are supplied: NIMNEAR_NIMIQ_NETWORK, NIMNEAR_MERCHANT_ADDRESS, and NIMNEAR_NIMIQ_RPC_URL. Partial or malformed configuration fails startup. No private key is accepted. The Mini App provider does not expose a reliable consensus-network identifier; testnet safety therefore depends on matching the configured backend RPC/network and the Nimiq Pay runtime testnet selection.
 - Tickets, QR codes, check-in, refunds, organizer payouts, notifications, and multiple tickets remain unsupported.
+
+## Data bootstrap boundary
+
+Normal server startup, `dev.sh`, Docker Compose, and migrations do not create event, place, profile, participant, purchase, ticket, or calendar records; calendar migrations create schema only. `make seed` is an explicitly invoked development/operations helper that bootstraps only RBAC roles and role permissions. Test fixtures remain isolated to test files and test databases. Postman collections are request tooling and never run as part of application startup. See `DATA_PROVENANCE.md` for the complete provenance audit.

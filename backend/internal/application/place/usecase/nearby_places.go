@@ -4,7 +4,9 @@ import (
 	"context"
 	"math"
 
+	"github.com/google/uuid"
 	"github.com/masterfabric-go/masterfabric/internal/application/place/dto"
+	"github.com/masterfabric-go/masterfabric/internal/domain/place/model"
 	"github.com/masterfabric-go/masterfabric/internal/domain/place/repository"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 )
@@ -51,14 +53,7 @@ func (uc *NearbyPlacesUseCase) Execute(ctx context.Context, latitude, longitude,
 			continue
 		}
 		data = append(data, dto.NearbyPlaceInfo{
-			ID:             place.ID,
-			Name:           place.Name,
-			Description:    place.Description,
-			Latitude:       place.Latitude,
-			Longitude:      place.Longitude,
-			Address:        place.Address,
-			Category:       place.Category,
-			ImageURL:       place.ImageURL,
+			PlaceInfo:      mapPlace(&place.Place),
 			DistanceMeters: int64(math.Round(place.DistanceMeters)),
 		})
 	}
@@ -74,4 +69,35 @@ func validateCoordinates(latitude, longitude float64) error {
 		return domainErr.New(domainErr.ErrBadRequest, "longitude must be between -180 and 180", nil)
 	}
 	return nil
+}
+
+// Get returns one active public place by stable ID.
+func (uc *NearbyPlacesUseCase) Get(ctx context.Context, id uuid.UUID) (*dto.PlaceResponse, error) {
+	if id == uuid.Nil {
+		return nil, domainErr.New(domainErr.ErrBadRequest, "place id is required", nil)
+	}
+	if uc.placeRepo == nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "place repository is not configured", nil)
+	}
+	place, err := uc.placeRepo.GetActiveByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if place == nil {
+		return nil, domainErr.New(domainErr.ErrNotFound, "place not found", nil)
+	}
+	return &dto.PlaceResponse{Data: mapPlace(place)}, nil
+}
+
+func mapPlace(place *model.Place) dto.PlaceInfo {
+	return dto.PlaceInfo{
+		ID:          place.ID,
+		Name:        place.Name,
+		Description: place.Description,
+		Latitude:    place.Latitude,
+		Longitude:   place.Longitude,
+		Address:     place.Address,
+		Category:    place.Category,
+		ImageURL:    place.ImageURL,
+	}
 }

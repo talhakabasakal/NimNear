@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -9,16 +10,108 @@ import (
 	"time"
 )
 
+const (
+	EnvironmentDevelopment = "development"
+	EnvironmentTest        = "test"
+	EnvironmentProduction  = "production"
+
+	defaultJWTSecret  = "change-me-in-production"
+	defaultJWTIssuer  = "masterfabric"
+	defaultDBHost     = "localhost"
+	defaultDBUser     = "masterfabric"
+	defaultDBPassword = "masterfabric"
+	defaultDBName     = "masterfabric"
+	defaultDBSSLMode  = "disable"
+)
+
 // Config holds all application configuration.
 type Config struct {
-	Server    ServerConfig
-	Database  DatabaseConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Kafka     KafkaConfig
-	WebSocket WebSocketConfig
-	Payments  PaymentConfig
-	Log       LogConfig
+	Environment string
+	Server      ServerConfig
+	Database    DatabaseConfig
+	Redis       RedisConfig
+	JWT         JWTConfig
+	Kafka       KafkaConfig
+	WebSocket   WebSocketConfig
+	Payments    PaymentConfig
+	Log         LogConfig
+}
+
+// IsProduction reports whether the configuration targets a production environment.
+func (c Config) IsProduction() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Environment), EnvironmentProduction)
+}
+
+// Validate checks environment-sensitive configuration before any infrastructure
+// or server resources are initialized. Errors intentionally contain variable
+// names and remediation guidance only; secret values are never included.
+func (c Config) Validate() error {
+	environment := strings.ToLower(strings.TrimSpace(c.Environment))
+	switch environment {
+	case EnvironmentDevelopment, EnvironmentTest:
+	case EnvironmentProduction:
+		if err := validateProductionJWT(c.JWT); err != nil {
+			return err
+		}
+		if err := validateProductionDatabase(c.Database); err != nil {
+			return err
+		}
+		if len(c.Server.CORSAllowedOrigins) == 0 || containsWildcardOrigin(c.Server.CORSAllowedOrigins) {
+			return fmt.Errorf("CORS_ALLOWED_ORIGINS must contain explicit origins in production")
+		}
+	default:
+		return fmt.Errorf("APP_ENV must be one of development, test, or production")
+	}
+
+	if err := c.Payments.ValidateForEnvironment(environment); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProductionJWT(cfg JWTConfig) error {
+	secret := strings.TrimSpace(cfg.Secret)
+	if secret == "" || secret == defaultJWTSecret {
+		return fmt.Errorf("JWT_SECRET must be explicitly configured in production")
+	}
+	if len(secret) < 32 {
+		return fmt.Errorf("JWT_SECRET must contain at least 32 characters in production")
+	}
+	if strings.TrimSpace(cfg.Issuer) == "" || strings.EqualFold(strings.TrimSpace(cfg.Issuer), defaultJWTIssuer) {
+		return fmt.Errorf("JWT_ISSUER must be explicitly configured in production")
+	}
+	return nil
+}
+
+func validateProductionDatabase(cfg DatabaseConfig) error {
+	if strings.TrimSpace(cfg.Host) == "" || strings.EqualFold(strings.TrimSpace(cfg.Host), defaultDBHost) {
+		return fmt.Errorf("DB_HOST must be explicitly configured in production")
+	}
+	if strings.TrimSpace(cfg.User) == "" || strings.EqualFold(strings.TrimSpace(cfg.User), defaultDBUser) {
+		return fmt.Errorf("DB_USER must be explicitly configured in production")
+	}
+	if strings.TrimSpace(cfg.Password) == "" || cfg.Password == defaultDBPassword {
+		return fmt.Errorf("DB_PASSWORD must be explicitly configured in production")
+	}
+	if strings.TrimSpace(cfg.DBName) == "" || strings.EqualFold(strings.TrimSpace(cfg.DBName), defaultDBName) {
+		return fmt.Errorf("DB_NAME must be explicitly configured in production")
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.SSLMode), defaultDBSSLMode) {
+		return fmt.Errorf("DB_SSLMODE must require TLS in production")
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return fmt.Errorf("DB_PORT must be a valid TCP port in production")
+	}
+	return nil
+}
+
+func containsWildcardOrigin(origins []string) bool {
+	for _, origin := range origins {
+		if strings.TrimSpace(origin) == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 // WebSocketConfig holds real-time WebSocket settings.
@@ -138,15 +231,84 @@ func (p PaymentConfig) Validate() error {
 	return nil
 }
 
+// ValidateForEnvironment applies the existing payment validation plus the
+// environment separation rules that prevent obvious testnet/development
+// settings from being used in production. It does not redesign payment
+// routing or infer a network from an RPC response.
+func (p PaymentConfig) ValidateForEnvironment(environment string) error {
+	if err := p.Validate(); err != nil {
+		return fmt.Errorf("invalid payment configuration: %w", err)
+	}
+	if environment != EnvironmentProduction || !p.Enabled() {
+		return nil
+	}
+
+	networkKind := classifyNimiqNetwork(p.NimiqNetwork)
+	if networkKind != "main" {
+		return fmt.Errorf("NIMNEAR_NIMIQ_NETWORK must identify the production main network")
+	}
+
+	parsed, err := url.Parse(p.NimiqRPCURL)
+	if err != nil {
+		return fmt.Errorf("NIMNEAR_NIMIQ_RPC_URL must be an absolute HTTP(S) URL")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" || host == "host.docker.internal" {
+		return fmt.Errorf("NIMNEAR_NIMIQ_RPC_URL must not use a local development host in production")
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return fmt.Errorf("NIMNEAR_NIMIQ_RPC_URL must not use a loopback host in production")
+	}
+
+	rpcKind := classifyNimiqRPCURL(p.NimiqRPCURL)
+	if rpcKind == "test" {
+		return fmt.Errorf("NIMNEAR_NIMIQ_RPC_URL must not identify a test network in production")
+	}
+	if rpcKind == "ambiguous" || (rpcKind != "unknown" && rpcKind != networkKind) {
+		return fmt.Errorf("NIMNEAR_NIMIQ_NETWORK and NIMNEAR_NIMIQ_RPC_URL identify different networks")
+	}
+	return nil
+}
+
+func classifyNimiqNetwork(network string) string {
+	normalized := strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(network))
+	switch normalized {
+	case "mainnet", "mainalbatross":
+		return "main"
+	case "testnet", "testalbatross":
+		return "test"
+	default:
+		return "unknown"
+	}
+}
+
+func classifyNimiqRPCURL(rawURL string) string {
+	value := strings.ToLower(rawURL)
+	hasTest := strings.Contains(value, "testnet") || strings.Contains(value, "test-albatross") || strings.Contains(value, "testalbatross")
+	hasMain := strings.Contains(value, "mainnet") || strings.Contains(value, "main-albatross") || strings.Contains(value, "mainalbatross")
+	switch {
+	case hasTest && hasMain:
+		return "ambiguous"
+	case hasTest:
+		return "test"
+	case hasMain:
+		return "main"
+	default:
+		return "unknown"
+	}
+}
+
 // LogConfig holds logging settings.
 type LogConfig struct {
 	Level  string // debug, info, warn, error
 	Format string // json, text
 }
 
-// Load reads configuration from environment variables with sensible defaults.
+// Load reads configuration from environment variables with development-safe
+// defaults. Production must call Validate and cannot use these defaults.
 func Load() *Config {
 	return &Config{
+		Environment: envOrDefault("APP_ENV", EnvironmentDevelopment),
 		Server: ServerConfig{
 			Host:               envOrDefault("SERVER_HOST", "0.0.0.0"),
 			Port:               envOrDefaultInt("SERVER_PORT", 8080),
@@ -173,9 +335,9 @@ func Load() *Config {
 			DB:       envOrDefaultInt("REDIS_DB", 0),
 		},
 		JWT: JWTConfig{
-			Secret:          envOrDefault("JWT_SECRET", "change-me-in-production"),
+			Secret:          envOrDefault("JWT_SECRET", defaultJWTSecret),
 			ExpirationHours: envOrDefaultInt("JWT_EXPIRATION_HOURS", 24),
-			Issuer:          envOrDefault("JWT_ISSUER", "masterfabric"),
+			Issuer:          envOrDefault("JWT_ISSUER", defaultJWTIssuer),
 		},
 		Kafka: KafkaConfig{
 			Brokers:           envOrDefaultSlice("KAFKA_BROKERS", []string{"localhost:9092"}),

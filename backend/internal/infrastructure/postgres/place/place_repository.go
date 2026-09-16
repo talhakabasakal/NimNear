@@ -2,9 +2,12 @@ package place
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/masterfabric-go/masterfabric/internal/domain/place/model"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
@@ -62,7 +65,7 @@ func (r *PlaceRepo) ListNearby(ctx context.Context, latitude, longitude, radiusM
 			WHERE is_active = TRUE AND %s
 		) AS candidates
 		WHERE distance_meters <= $3
-		ORDER BY distance_meters ASC
+		ORDER BY distance_meters ASC, id ASC
 		LIMIT $%d`, where, limitPlaceholder)
 
 	args = append(args, limit)
@@ -108,4 +111,33 @@ func normalizeLongitude(longitude float64) float64 {
 		longitude -= 360
 	}
 	return longitude
+}
+
+// GetActiveByID returns an active place by its stable public ID.
+func (r *PlaceRepo) GetActiveByID(ctx context.Context, id uuid.UUID) (*model.Place, error) {
+	var place model.Place
+	err := r.db.QueryRow(ctx, `
+		SELECT id, name, description, latitude, longitude, address, category, image_url,
+		       is_active, created_at, updated_at
+		FROM places
+		WHERE id = $1 AND is_active = TRUE`, id).Scan(
+		&place.ID,
+		&place.Name,
+		&place.Description,
+		&place.Latitude,
+		&place.Longitude,
+		&place.Address,
+		&place.Category,
+		&place.ImageURL,
+		&place.IsActive,
+		&place.CreatedAt,
+		&place.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErr.New(domainErr.ErrNotFound, "place not found", nil)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to get place", err)
+	}
+	return &place, nil
 }

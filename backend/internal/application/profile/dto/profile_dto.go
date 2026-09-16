@@ -13,9 +13,9 @@ import (
 type PublicProfileInfo struct {
 	ID                  uuid.UUID `json:"id"`
 	DisplayName         string    `json:"display_name"`
-	Username            *string   `json:"username,omitempty"`
-	Bio                 string    `json:"bio"`
-	AvatarURL           string    `json:"avatar_url"`
+	Username            *string   `json:"username"`
+	Bio                 *string   `json:"bio"`
+	AvatarURL           *string   `json:"avatar_url"`
 	JoinedAt            time.Time `json:"joined_at"`
 	OrganizedEventCount int       `json:"organized_event_count"`
 	AttendedEventCount  int       `json:"attended_event_count"`

@@ -17,6 +17,7 @@ import (
 	infraAuth "github.com/masterfabric-go/masterfabric/internal/infrastructure/auth"
 	apimgmtHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/apimanagement"
 	auditHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/audit"
+	calendarHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/calendar"
 	eventHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/event"
 	participationHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventparticipation"
 	eventpurchaseHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventpurchase"
@@ -30,6 +31,7 @@ import (
 	nimiqRPC "github.com/masterfabric-go/masterfabric/internal/infrastructure/nimiq/rpc"
 	pgApimgmt "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/apimanagement"
 	pgAudit "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/audit"
+	pgCalendar "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/calendar"
 	pgEvent "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/event"
 	pgParticipation "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/eventparticipation"
 	pgEventPurchase "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/eventpurchase"
@@ -41,6 +43,7 @@ import (
 
 	// Application use cases
 	apimgmtUC "github.com/masterfabric-go/masterfabric/internal/application/apimanagement/usecase"
+	calendarUC "github.com/masterfabric-go/masterfabric/internal/application/calendar/usecase"
 	eventUC "github.com/masterfabric-go/masterfabric/internal/application/event/usecase"
 	participationUC "github.com/masterfabric-go/masterfabric/internal/application/eventparticipation/usecase"
 	purchaseUC "github.com/masterfabric-go/masterfabric/internal/application/eventpurchase/usecase"
@@ -74,8 +77,8 @@ func main() {
 func run() error {
 	// Load configuration
 	cfg := config.Load()
-	if err := cfg.Payments.Validate(); err != nil {
-		return fmt.Errorf("invalid payment configuration: %w", err)
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid application configuration: %w", err)
 	}
 
 	// Initialize logger
@@ -86,10 +89,6 @@ func run() error {
 		"host", cfg.Server.Host,
 		"port", cfg.Server.Port,
 	)
-
-	if cfg.JWT.Secret == "change-me-in-production" {
-		log.Warn("JWT_SECRET is unset; authentication uses a known default value")
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -106,7 +105,10 @@ func run() error {
 	// Initialize PostgreSQL
 	db, err := database.NewPostgresPool(ctx, cfg.Database)
 	if err != nil {
-		log.Warn("postgres unavailable, running without database", "error", err)
+		if cfg.IsProduction() {
+			return fmt.Errorf("postgres unavailable in production")
+		}
+		log.Warn("postgres unavailable, running without database", "reason", "connection failed")
 		db = nil
 	} else {
 		defer db.Close()
@@ -241,6 +243,7 @@ func buildDependencies(
 	policyRepo := pgApimgmt.NewPolicyRepo(db)
 	auditRepo := pgAudit.NewAuditRepo(db)
 	placeRepo := pgPlace.NewPlaceRepo(db)
+	calendarRepo := pgCalendar.NewCalendarRepo(db)
 	eventRepo := pgEvent.NewEventRepo(db)
 	participationRepo := pgParticipation.NewParticipationRepo(db)
 	purchaseRepo := pgEventPurchase.NewPurchaseRepo(db)
@@ -268,7 +271,7 @@ func buildDependencies(
 	updatePolicyUC := apimgmtUC.NewUpdatePolicyUseCase(policyRepo)
 	retireEndpointUC := apimgmtUC.NewRetireEndpointUseCase(endpointRepo, eventBus)
 	activateEndpointUC := apimgmtUC.NewActivateEndpointUseCase(endpointRepo, eventBus)
-	eventUseCase := eventUC.NewEventUseCase(eventRepo)
+	eventUseCase := eventUC.NewEventUseCaseWithAssociations(eventRepo, placeRepo, calendarRepo)
 	participationUseCase := participationUC.NewParticipationUseCase(participationRepo)
 	purchaseUseCase := purchaseUC.NewPurchaseUseCase(purchaseRepo, cfg.Payments.HoldDuration)
 	if cfg.Payments.Enabled() {
@@ -284,8 +287,9 @@ func buildDependencies(
 	}
 	profileUseCase := profileUC.NewProfileUseCase(pgProfile.NewProfileRepo(db), eventRepo)
 	nearbyPlacesUC := placeUC.NewNearbyPlacesUseCase(placeRepo)
+	calendarUseCase := calendarUC.NewCalendarUseCase(calendarRepo, eventRepo)
 
-	// --- Register sample Kafka consumers ---
+	// --- Register Kafka consumers ---
 	// Log all IAM events
 	eventBus.Subscribe(events.TopicIAM, func(ctx context.Context, event events.Event) error {
 		log.Info("iam event received", "event", event)
@@ -321,6 +325,7 @@ func buildDependencies(
 	deps.PurchaseHandler = eventpurchaseHandler.NewHandler(purchaseUseCase)
 	deps.ProfileHandler = profileHandler.NewHandler(profileUseCase)
 	deps.PlaceHandler = placeHandler.NewHandler(nearbyPlacesUC)
+	deps.CalendarHandler = calendarHandler.NewHandler(calendarUseCase)
 
 	// --- WebSocket real-time hub ---
 	wsHub := infraWS.NewHub(log, cfg.WebSocket.MaxConnections)
@@ -359,17 +364,8 @@ func buildDependencies(
 	backendRegistry := gateway.NewBackendRegistry()
 	dynamicResolver := gateway.NewDynamicHandlerResolver(backendRegistry, log, db)
 
-	// Optional: Register service configurations for HTTP proxying
-	// Example:
-	// dynamicResolver.RegisterServiceConfig("product-service", gateway.ServiceConfig{
-	//     BaseURL: "https://api.example.com/products",
-	//     Headers: map[string]string{"Authorization": "Bearer token"},
-	// })
-
-	// Optional: Register specific handlers for services that need custom logic
-	// Example:
-	// productHandler := handlers.NewProductHandler(...)
-	// backendRegistry.Register("product-service", productHandler)
+	// Service proxies and custom handlers must be backed by an authoritative
+	// data source and registered explicitly. NIMNear registers none by default.
 
 	// Wire interceptors into gateway pipeline with dynamic resolver
 	deps.GatewayPipeline = gateway.NewPipeline(

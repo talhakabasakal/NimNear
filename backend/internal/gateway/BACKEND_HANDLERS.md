@@ -99,9 +99,9 @@ backendRegistry.Register("product-service", productHandler)
 dynamicResolver := gateway.NewDynamicHandlerResolver(backendRegistry, log)
 ```
 
-## Example Handler Implementation
+## Custom handler requirement
 
-See `internal/gateway/handlers/example_handler.go` for a complete example implementation.
+NIMNear does not ship a sample handler that returns fabricated records. A custom handler must use an authoritative backend data source and be registered explicitly before a managed endpoint can dispatch to it.
 
 ## Defining Endpoints
 

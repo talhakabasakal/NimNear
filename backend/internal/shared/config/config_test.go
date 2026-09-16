@@ -2,13 +2,17 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestLoad_Defaults(t *testing.T) {
+	t.Setenv("APP_ENV", EnvironmentDevelopment)
 	cfg := Load()
+
+	assert.Equal(t, EnvironmentDevelopment, cfg.Environment)
 
 	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
 	assert.Equal(t, 8080, cfg.Server.Port)
@@ -74,4 +78,123 @@ func TestDatabaseConfig_DSN_EscapesSpecialCharacters(t *testing.T) {
 func TestRedisConfig_Addr(t *testing.T) {
 	cfg := RedisConfig{Host: "redis.local", Port: 6380}
 	assert.Equal(t, "redis.local:6380", cfg.Addr())
+}
+
+func validProductionConfig() Config {
+	return Config{
+		Environment: EnvironmentProduction,
+		Server:      ServerConfig{CORSAllowedOrigins: []string{"https://app.example.com"}},
+		Database: DatabaseConfig{
+			Host:     "postgres.internal",
+			Port:     5432,
+			User:     "nimnear_app",
+			Password: "a-production-db-password",
+			DBName:   "nimnear_production",
+			SSLMode:  "require",
+		},
+		JWT: JWTConfig{
+			Secret:          strings.Repeat("j", 32),
+			ExpirationHours: 24,
+			Issuer:          "nimnear-production",
+		},
+	}
+}
+
+func TestConfigValidate_DevelopmentRemainsUsable(t *testing.T) {
+	t.Setenv("APP_ENV", EnvironmentDevelopment)
+	cfg := Load()
+
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestConfigValidate_ProductionMissingJWTSecretRejected(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.JWT.Secret = ""
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "JWT_SECRET")
+}
+
+func TestConfigValidate_ProductionDefaultJWTSecretRejected(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.JWT.Secret = defaultJWTSecret
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "JWT_SECRET")
+	assert.NotContains(t, err.Error(), defaultJWTSecret)
+}
+
+func TestConfigValidate_ProductionDefaultDatabaseRejected(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Database = DatabaseConfig{
+		Host:     defaultDBHost,
+		Port:     5432,
+		User:     defaultDBUser,
+		Password: defaultDBPassword,
+		DBName:   defaultDBName,
+		SSLMode:  defaultDBSSLMode,
+	}
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DB_HOST")
+	assert.NotContains(t, err.Error(), defaultDBPassword)
+}
+
+func TestConfigValidate_ProductionExplicitConfigurationAccepted(t *testing.T) {
+	cfg := validProductionConfig()
+
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestConfigValidate_DoesNotExposeSecrets(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Database.Host = defaultDBHost
+	cfg.Database.Password = "do-not-log-this-password"
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.NotContains(t, err.Error(), cfg.Database.Password)
+	assert.NotContains(t, err.Error(), cfg.JWT.Secret)
+}
+
+func TestPaymentConfigValidateForEnvironment_RejectsTestNetworkInProduction(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Payments = PaymentConfig{
+		NimiqNetwork:    "TestAlbatross",
+		MerchantAddress: "NQ07 0000 0000 0000 0000 0000 0000 0000 0000",
+		NimiqRPCURL:     "https://rpc.testnet.example",
+	}
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NIMNEAR_NIMIQ_NETWORK")
+}
+
+func TestPaymentConfigValidateForEnvironment_RejectsNetworkMismatch(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Payments = PaymentConfig{
+		NimiqNetwork:    "MainAlbatross",
+		MerchantAddress: "NQ07 0000 0000 0000 0000 0000 0000 0000 0000",
+		NimiqRPCURL:     "https://rpc.testnet.example",
+	}
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NIMNEAR_NIMIQ_RPC_URL")
+}
+
+func TestPaymentConfigValidateForEnvironment_RejectsLocalRPCInProduction(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Payments = PaymentConfig{
+		NimiqNetwork:    "MainAlbatross",
+		MerchantAddress: "NQ07 0000 0000 0000 0000 0000 0000 0000 0000",
+		NimiqRPCURL:     "http://localhost:8648",
+	}
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NIMNEAR_NIMIQ_RPC_URL")
 }

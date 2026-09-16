@@ -1,7 +1,8 @@
 package main
 
-// seed.go - Database seeding script
-// Run with: go run scripts/seed.go
+// seed.go - Manual RBAC role and permission bootstrap tool.
+// It is not called by server startup and does not create NIMNear product records.
+// Run explicitly with: go run scripts/seed.go
 
 import (
 	"context"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/masterfabric-go/masterfabric/internal/shared/config"
 	"github.com/masterfabric-go/masterfabric/internal/shared/database"
@@ -27,17 +28,21 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Println("🌱 Seeding database...")
+	fmt.Println("Bootstrapping RBAC roles and permissions...")
 
 	// Seed roles
 	if err := seedRoles(ctx, db); err != nil {
 		log.Fatalf("Failed to seed roles: %v", err)
 	}
 
-	fmt.Println("✅ Database seeded successfully!")
+	fmt.Println("RBAC bootstrap completed successfully.")
 }
 
-func seedRoles(ctx context.Context, db *pgxpool.Pool) error {
+type sqlExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func seedRoles(ctx context.Context, db sqlExecutor) error {
 	roles := []struct {
 		name        string
 		description string
@@ -93,7 +98,7 @@ func seedRoles(ctx context.Context, db *pgxpool.Pool) error {
 			}
 		}
 
-		fmt.Printf("  ✓ Seeded role: %s\n", r.name)
+		fmt.Printf("  bootstrapped role: %s\n", r.name)
 	}
 
 	return nil

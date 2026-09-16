@@ -2,6 +2,7 @@ import { CalendarDays, Clock3, MapPin, Users } from "lucide-react";
 import Link from "next/link";
 
 import { formatNimPrice, type EventRecord } from "@/lib/api/events";
+import { ExternalMediaImage } from "@/components/media/external-media-image";
 
 import { EventStatusBadge } from "./event-status-badge";
 
@@ -15,19 +16,16 @@ const timeFormatter = new Intl.DateTimeFormat("tr-TR", { hour: "2-digit", minute
 
 
 function EventArtwork({ event, compact }: EventCardProps) {
-  if (event.image_url) {
-    return (
-      <div className={"relative overflow-hidden bg-surface-hover " + (compact ? "h-32" : "h-40")}>
-        <img src={event.image_url} alt="" className="size-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0f0e10]/70 via-transparent to-transparent" />
-      </div>
-    );
-  }
-
-  return (
+  const fallback = (
     <div className={"relative overflow-hidden bg-[radial-gradient(circle_at_25%_20%,#8277ff_0,transparent_32%),linear-gradient(135deg,#251e3a,#171621_60%,#382447)] " + (compact ? "h-32" : "h-40")} aria-hidden="true">
       <div className="absolute -right-8 -top-10 size-36 rounded-full border border-accent/20" />
       <div className="absolute bottom-0 left-0 h-1/2 w-full bg-gradient-to-t from-[#0f0e10]/50 to-transparent" />
+    </div>
+  );
+  return (
+    <div className={"relative overflow-hidden bg-surface-hover " + (compact ? "h-32" : "h-40")}>
+      <ExternalMediaImage src={event.image_url} className="size-full object-cover" fallback={fallback} />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0f0e10]/70 via-transparent to-transparent" />
     </div>
   );
 }

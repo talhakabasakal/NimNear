@@ -45,6 +45,17 @@ Prefer server components unless a component needs browser-only behavior or inter
 
 Use `"use client"` only where required.
 
+
+### Calendar discovery
+
+`/calendars` is a server-rendered public calendar surface backed by `GET /api/v1/calendars`. `/calendars/[id]` uses `GET /api/v1/calendars/{id}` and renders only the associated backend events returned by that response. Public list/detail pages distinguish loading, empty, error, and not-found states and never substitute static calendar records.
+
+The authenticated workspace reads `GET /api/v1/me/calendars` and renders real `Takvimlerim` and `Takip edilenler` collections. Calendar creation and follow/unfollow actions send the existing backend JWT. A connected Nimiq account without that JWT is shown a restrained blocked state; `listAccounts()` is never treated as backend authentication.
+
+### Location-driven discovery
+
+The homepage does not request location on load and does not assume Istanbul or another city. The user must explicitly choose `Konumumu kullan`. The browser geolocation result is sent only to `GET /api/v1/places/nearby` for the existing radius-bounded search and is not stored as profile data. Permission denied, unsupported WebView/browser, timeout, backend failure, and no-nearby-place results have distinct UI states; users can continue browsing `/events` without location. Successful nearby places link to `/places/{id}`, whose event list is filtered server-side by the stable place UUID.
+
 Likely client-side areas include:
 - Nimiq SDK integration;
 - geolocation;
@@ -203,6 +214,31 @@ npm run build
 Run a dedicated typecheck script too if the project defines one.
 
 
+## Event creation
+
+`/events/create` remains protected by the existing backend JWT. Native Nimiq
+`listAccounts()` connection is not treated as authentication; users without a
+valid JWT see the blocked native-connect state and cannot submit the form.
+
+The form loads the authenticated user's owned calendars from
+`GET /api/v1/me/calendars` and offers only those real active records. Nearby
+place selection is explicit and uses `GET /api/v1/places/nearby` after browser
+geolocation; no static place options are rendered. A selected place is sent as
+`place_id` and cannot be combined with custom address/coordinates. Without a
+place, custom address and a complete coordinate pair are optional.
+
+Supported inputs are title, description, local date/time controls serialized
+as RFC3339 UTC by the browser, city, optional HTTP(S) image URL, optional
+capacity, optional owned calendar, optional active place or custom location,
+and free/paid `price_nim`. NIM input is normalized without floating-point
+rounding: one NIM is exactly 100,000 Luna and more than five fractional
+places are rejected. Empty capacity means unlimited. Successful creation
+navigates to the backend-returned event ID; validation, dependency, auth, and
+service errors remain visible.
+
+Figma-only landscape, theme, and approval controls are intentionally omitted
+until the backend has a persisted contract for them.
+
 ## Free event participation
 
 The event detail page uses the typed participation API layer for:
@@ -215,7 +251,7 @@ The page restores the existing session through /api/v1/me before loading user-sp
 
 Paid events do not show an RSVP action; they use the separate authenticated Nimiq Pay purchase component. Past events do not show an RSVP action, and sold-out events render a disabled state unless the current user is already attending and needs to cancel.
 
-RSVP state is not requested through the public event fetch and is never presented as a global attendance claim. Payment state is user-specific and handled by the separate purchase component; ticket, QR, invitation, calendar, and notification UI is not implemented.
+RSVP state is not requested through the public event fetch and is never presented as a global attendance claim. Payment state is user-specific and handled by the separate purchase component; ticket, QR, invitation, and notification UI is not implemented. Public calendar discovery and legacy-JWT-protected calendar workspace actions are implemented separately.
 
 
 
@@ -231,6 +267,14 @@ The frontend now includes:
 The Profile screen uses the confirmed Figma hierarchy: avatar fallback, display name, optional handle/bio, join date, organized/attended counts, tabs, real event cards, loading, error, and empty states. The authenticated self profile also links to the inferred `/profile/edit` route. That route uses the typed `PATCH /api/v1/me/profile` API for display name, username, and plain-text bio only; avatar and account identity fields remain read-only. Public profiles do not expose the edit control.
 
 The profile API is public and privacy-safe. The frontend does not display email as profile identity, and it does not fabricate organizer names, avatars, venue metadata, payment state, tickets, QR codes, or invitation state.
+
+## Optional fields and media rendering
+
+Typed event and profile records mirror the backend's explicit-null response contract. Optional event fields (`capacity`, `image_url`, `place_id`, coordinates, `address`, and `organizer_id`) and optional profile fields (`username`, `bio`, and `avatar_url`) are `T | null`, never optional properties. Components compare or coalesce these values deliberately rather than depending on an omitted property being falsy.
+
+Event and profile images share a client-side external-media renderer. It accepts only absolute HTTP(S) URLs within the backend's 2,048-byte limit, sends no referrer, and switches to the established neutral artwork/avatar state when media is absent, invalid, or fails to load. It never substitutes a stock event image or a profile record. The neutral `UserRound` avatar and event gradient are presentation states, not claims that uploaded media exists.
+
+The project currently uses browser `<img>` loading for validated external URLs, so Next.js remote image patterns are not widened. No media host allowlist exists yet. A future first-party object-storage or approved-host decision should add matching backend host validation and browser CSP/image configuration.
 
 ## Paid-event payment integration
 

@@ -47,6 +47,10 @@ func (f fakeProfileEventRepository) ListPublicByAttendee(context.Context, uuid.U
 	return f.attended, nil
 }
 
+func (f fakeProfileEventRepository) ListPublicByCalendar(context.Context, uuid.UUID) ([]*eventmodel.Event, error) {
+	return nil, nil
+}
+
 func (f fakeProfileEventRepository) GetPublicByID(context.Context, uuid.UUID) (*eventmodel.Event, error) {
 	return nil, nil
 }
@@ -86,6 +90,30 @@ func TestGetPublicMapsPrivacySafeProfile(t *testing.T) {
 	}
 	if string(encoded) == "" || contains(string(encoded), "email") || contains(string(encoded), "password") {
 		t.Fatalf("private fields leaked: %s", encoded)
+	}
+}
+
+func TestGetPublicMapsMissingAndUnsafeMediaToNull(t *testing.T) {
+	id := uuid.New()
+	profile := testProfile(id)
+	profile.AvatarURL = "javascript:alert(1)"
+
+	result, err := NewProfileUseCase(&fakeProfileRepository{profile: profile}, fakeProfileEventRepository{}).GetPublic(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetPublic returned error: %v", err)
+	}
+	if result.Data.Bio != nil || result.Data.AvatarURL != nil {
+		t.Fatalf("missing bio or unsafe avatar was exposed: %#v", result.Data)
+	}
+
+	profile.Bio = "Public bio"
+	profile.AvatarURL = "https://media.example/avatar.png"
+	result, err = NewProfileUseCase(&fakeProfileRepository{profile: profile}, fakeProfileEventRepository{}).GetPublic(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetPublic with valid media returned error: %v", err)
+	}
+	if result.Data.Bio == nil || *result.Data.Bio != profile.Bio || result.Data.AvatarURL == nil || *result.Data.AvatarURL != profile.AvatarURL {
+		t.Fatalf("valid optional profile values were not preserved: %#v", result.Data)
 	}
 }
 

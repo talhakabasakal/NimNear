@@ -4,10 +4,10 @@ import { Bell, CalendarDays, Compass, Moon, Sparkles } from "lucide-react";
 const navigation = [
   { href: "/", label: "Keşfet", icon: Compass },
   { href: "/events", label: "Etkinlikler", icon: CalendarDays },
+  { href: "/calendars", label: "Takvimler", icon: CalendarDays },
   { href: "/events/create", label: "Etkinlik oluştur" },
 ];
 
-const unavailableNavigation = ["Takvimler"];
 
 export function AppHeader() {
   return (
@@ -23,9 +23,6 @@ export function AppHeader() {
             <Link key={href} href={href} className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-foreground">
               {Icon ? <Icon size={15} /> : null}{label}
             </Link>
-          ))}
-          {unavailableNavigation.map((label) => (
-            <span key={label} className="inline-flex h-9 shrink-0 items-center rounded-lg px-3 text-[13px] font-medium text-muted/55" aria-disabled="true" title="Yakında">{label}</span>
           ))}
         </nav>
 

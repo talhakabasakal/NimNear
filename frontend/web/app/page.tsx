@@ -4,10 +4,12 @@ import Link from "next/link";
 import { AppHeader } from "@/components/app/app-header";
 import { StateCard } from "@/components/app/state-card";
 import { CategoryCard } from "@/components/discover/category-card";
-import { CityCard } from "@/components/discover/city-card";
+import { CalendarCard } from "@/components/calendars/calendar-card";
+import { NearbyPlaceDiscovery } from "@/components/discover/nearby-place-discovery";
 import { DiscoverHero } from "@/components/discover/discover-hero";
 import { EventList } from "@/components/events/event-list";
 import { fetchEvents, type EventRecord } from "@/lib/api/events";
+import { fetchCalendars, type CalendarRecord } from "@/lib/api/calendars";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,14 @@ async function loadHomeEvents(): Promise<{ events: EventRecord[]; error?: string
     return { events: await fetchEvents({ limit: 4 }) };
   } catch {
     return { events: [], error: "api" };
+  }
+}
+
+async function loadHomeCalendars(): Promise<{ calendars: CalendarRecord[]; error?: string }> {
+  try {
+    return { calendars: await fetchCalendars(3) };
+  } catch {
+    return { calendars: [], error: "api" };
   }
 }
 
@@ -29,7 +39,7 @@ const categories = [
 ];
 
 export default async function Home() {
-  const result = await loadHomeEvents();
+  const [result, calendarResult] = await Promise.all([loadHomeEvents(), loadHomeCalendars()]);
 
   return (
     <div className="min-h-svh bg-background">
@@ -40,8 +50,8 @@ export default async function Home() {
         <section>
           <div className="mb-4 flex items-end justify-between gap-4">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">İstanbul</p>
-              <h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Popüler etkinlikler</h2>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Etkinlik akışı</p>
+              <h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Yaklaşan etkinlikler</h2>
             </div>
             <Link href="/events" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted transition-colors hover:text-foreground">
               Tümünü görüntüle <ArrowRight size={14} />
@@ -64,28 +74,14 @@ export default async function Home() {
           <div className="mb-4 flex items-end justify-between gap-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Topluluk</p>
-              <h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Öne çıkan takvimler</h2>
+              <h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Topluluk takvimleri</h2>
             </div>
-            <span className="rounded-full border border-border-faint px-3 py-1 text-[11px] font-medium text-muted">Yakında</span>
+            <Link href="/calendars" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted transition-colors hover:text-foreground">Tümünü görüntüle <ArrowRight size={14} /></Link>
           </div>
-          <StateCard kind="empty" title="Takvimler yakında burada" description="Topluluk takvimleri için backend desteği henüz hazır değil." />
+          {calendarResult.error ? <StateCard kind="error" title="Takvimler yüklenemedi" description="Takvim servisine şu anda ulaşılamıyor." /> : calendarResult.calendars.length === 0 ? <StateCard kind="empty" title="Henüz herkese açık takvim yok" description="Topluluk takvimleri oluşturulduğunda burada görünecek." /> : <div className="grid gap-3 sm:grid-cols-3">{calendarResult.calendars.map((calendar) => <CalendarCard key={calendar.id} calendar={calendar} />)}</div>}
         </section>
 
-        <section>
-          <div className="mb-4 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Bölgeler</p>
-              <h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Şehrini seç</h2>
-            </div>
-            <span className="text-xs text-muted">İstanbul</span>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <CityCard name="İstanbul" detail="Şehirdeki tüm etkinlikler" featured />
-            <CityCard name="Kadıköy" detail="Mahalle etkinlikleri" />
-            <CityCard name="Galata" detail="Sanat ve kültür" />
-            <CityCard name="Karaköy" detail="Yeni buluşmalar" />
-          </div>
-        </section>
+        <NearbyPlaceDiscovery />
       </main>
     </div>
   );

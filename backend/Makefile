@@ -75,7 +75,7 @@ clean:
 	@echo "Cleaning..."
 	rm -rf $(BUILD_DIR) coverage.out coverage.html tmp
 
-## seed: Seed the database with sample data
+## seed: Manually bootstrap RBAC roles and permissions
 seed:
-	@echo "Seeding database..."
+	@echo "Bootstrapping RBAC roles and permissions..."
 	go run ./scripts/seed.go

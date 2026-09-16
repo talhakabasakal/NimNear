@@ -31,6 +31,10 @@ func (f handlerEventRepository) ListPublicByAttendee(_ context.Context, _ uuid.U
 	return nil, nil
 }
 
+func (f handlerEventRepository) ListPublicByCalendar(_ context.Context, _ uuid.UUID) ([]*domainEvent.Event, error) {
+	return nil, nil
+}
+
 func (f handlerEventRepository) GetPublicByID(_ context.Context, _ uuid.UUID) (*domainEvent.Event, error) {
 	return nil, f.err
 }

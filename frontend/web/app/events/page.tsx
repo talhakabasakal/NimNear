@@ -35,7 +35,7 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
             <Link href="/" className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Keşfet</Link>
             <div className="flex items-center gap-3">
               <span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-accent"><CalendarDays size={19} /></span>
-              <div><p className="text-xs font-medium uppercase tracking-[0.15em] text-accent">İstanbul</p><h1 className="mt-1 text-3xl font-semibold tracking-[-0.035em] text-foreground">Etkinlikler</h1></div>
+              <div><p className="text-xs font-medium uppercase tracking-[0.15em] text-accent">Etkinlik akışı</p><h1 className="mt-1 text-3xl font-semibold tracking-[-0.035em] text-foreground">Etkinlikler</h1></div>
             </div>
           </div>
           <nav className="flex rounded-lg border border-border bg-surface p-1" aria-label="Etkinlik zamanı">

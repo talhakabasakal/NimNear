@@ -9,7 +9,8 @@ export type EventRecord = {
   currency: string;
   capacity: number | null;
   attendee_count: number;
-  image_url: string;
+  image_url: string | null;
+  calendar_id: string | null;
   place_id: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -38,19 +39,40 @@ export class EventsApiError extends Error {
   }
 }
 
+const LUNAS_PER_NIM = BigInt("100000");
+const MAX_INT64 = BigInt("9223372036854775807");
+
+/** Converts a decimal NIM string to exact Luna without using floating point. */
+export function nimToLunas(value: string): bigint | null {
+  const normalized = value.trim();
+  if (!normalized || !/^[0-9]+(?:\.[0-9]+)?$/.test(normalized)) return null;
+
+  const [integerPart, fractionPart = ""] = normalized.split(".");
+  if (fractionPart.length > 5) return null;
+
+  const fraction = BigInt((fractionPart + "00000").slice(0, 5));
+  const lunas = BigInt(integerPart) * LUNAS_PER_NIM + fraction;
+  return lunas <= MAX_INT64 ? lunas : null;
+}
+
+/** Returns the canonical exact decimal string accepted by POST /events. */
+export function normalizeNimPrice(value: string): string | null {
+  const lunas = nimToLunas(value);
+  if (lunas === null) return null;
+  if (lunas === BigInt("0")) return "0";
+
+  const integer = lunas / LUNAS_PER_NIM;
+  const fraction = (lunas % LUNAS_PER_NIM).toString().padStart(5, "0").replace(/0+$/, "");
+  return fraction ? `${integer}.${fraction}` : integer.toString();
+}
+
 export function formatNimPrice(price: string) {
-  const normalized = price.trim();
-  if (!normalized) return price;
-
-  const [integer, fraction] = normalized.split(".");
-  if (!fraction) return normalized;
-
-  const trimmedFraction = fraction.replace(/0+$/, "");
-  return trimmedFraction ? `${integer}.${trimmedFraction}` : integer;
+  return normalizeNimPrice(price) ?? price.trim();
 }
 
 export type EventQuery = {
   city?: string;
+  place_id?: string;
   from?: string;
   to?: string;
   limit?: number;
@@ -67,6 +89,7 @@ export async function fetchEvents(query: EventQuery = {}): Promise<EventRecord[]
   const url = new URL("/api/v1/events", apiBaseUrl);
 
   if (query.city) url.searchParams.set("city", query.city);
+  if (query.place_id) url.searchParams.set("place_id", query.place_id);
   if (query.from) url.searchParams.set("from", query.from);
   if (query.to) url.searchParams.set("to", query.to);
   if (query.limit) url.searchParams.set("limit", String(query.limit));
@@ -99,6 +122,7 @@ export type CreateEventInput = {
   currency: string;
   capacity?: number;
   image_url?: string;
+  calendar_id?: string;
   place_id?: string;
   latitude?: number;
   longitude?: number;

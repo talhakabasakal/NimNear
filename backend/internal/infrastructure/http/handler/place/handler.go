@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/masterfabric-go/masterfabric/internal/application/place/usecase"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 	"github.com/masterfabric-go/masterfabric/internal/shared/response"
@@ -73,4 +75,23 @@ func parseFloat(raw, name string) (float64, error) {
 		return 0, domainErr.New(domainErr.ErrBadRequest, name+" must be a valid number", err)
 	}
 	return value, nil
+}
+
+// Get returns one active public place by UUID.
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, domainErr.New(domainErr.ErrBadRequest, "invalid place id", nil))
+		return
+	}
+	if h.nearbyPlacesUC == nil {
+		response.Error(w, domainErr.New(domainErr.ErrInternal, "place service is not configured", nil))
+		return
+	}
+	result, err := h.nearbyPlacesUC.Get(r.Context(), id)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
 }

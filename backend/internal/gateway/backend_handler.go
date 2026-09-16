@@ -9,7 +9,7 @@ import (
 )
 
 // BackendHandler defines the interface for backend service handlers.
-// Each backend service (e.g., "product-service", "order-service") implements this interface.
+// Each explicitly configured backend service implements this interface.
 type BackendHandler interface {
 	// Handle processes the request and returns a response.
 	// The endpoint contains metadata about the endpoint (method, path, schema, etc.)
@@ -32,7 +32,6 @@ func NewBackendRegistry() *BackendRegistry {
 }
 
 // Register registers a handler for a backend service.
-// Example: registry.Register("product-service", productHandler)
 func (r *BackendRegistry) Register(serviceName string, handler BackendHandler) {
 	if r.handlers == nil {
 		r.handlers = make(map[string]BackendHandler)

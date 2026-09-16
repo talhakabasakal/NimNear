@@ -20,9 +20,9 @@ export function DiscoverHero({ eventCount, hasError = false }: DiscoverHeroProps
       </div>
 
       <div className="max-w-lg">
-        <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-[11px] font-medium text-accent"><Sparkles size={13} /> İstanbul’da şimdi</span>
-        <h1 className="max-w-md text-3xl font-semibold leading-[1.05] tracking-[-0.04em] text-white sm:text-[42px]">Yakınındaki güzel anları keşfet.</h1>
-        <p className="mt-4 max-w-sm text-sm leading-6 text-white/65">Şehrindeki toplulukları, etkinlikleri ve yeni buluşma noktalarını tek yerde bul.</p>
+        <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-[11px] font-medium text-accent"><Sparkles size={13} /> NIMNear keşif</span>
+        <h1 className="max-w-md text-3xl font-semibold leading-[1.05] tracking-[-0.04em] text-white sm:text-[42px]">Güzel anları keşfet.</h1>
+        <p className="mt-4 max-w-sm text-sm leading-6 text-white/65">Topluluk etkinliklerini ve yeni buluşmaları tek yerde keşfet.</p>
         <div className="mt-7 flex flex-wrap items-center gap-3">
           <Link href="/events" className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary/90">Etkinlikleri keşfet <ArrowRight size={15} /></Link>
           <span className="inline-flex items-center gap-2 text-xs text-white/60"><MapPin size={14} />{hasError ? "Etkinlik servisi bekleniyor" : eventCount + " yaklaşan etkinlik"}</span>

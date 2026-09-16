@@ -1,12 +1,14 @@
 "use client";
 
+import { UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { AppHeader } from "@/components/app/app-header";
-import { AuthPanel } from "@/components/auth/auth-panel";
+import { NimiqConnect } from "@/components/auth/nimiq-connect";
 import { StateCard } from "@/components/app/state-card";
+import { ExternalMediaImage } from "@/components/media/external-media-image";
 import { Button } from "@/components/ui/button";
 import { readAuthSession } from "@/lib/api/auth";
 import { fetchProfile, ProfilesApiError, updateProfile, type ProfileRecord } from "@/lib/api/profiles";
@@ -48,7 +50,7 @@ function ProfileEditForm({ initialProfile, token }: { initialProfile: ProfileRec
   const [values, setValues] = useState<FormValues>({
     displayName: initialProfile.display_name,
     username: initialProfile.username ?? "",
-    bio: initialProfile.bio,
+    bio: initialProfile.bio ?? "",
   });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [pending, setPending] = useState(false);
@@ -81,7 +83,7 @@ function ProfileEditForm({ initialProfile, token }: { initialProfile: ProfileRec
   return (
     <section className="rounded-xl border border-border bg-surface p-5 sm:p-7">
       <div className="flex items-start gap-4 border-b border-border pb-5">
-        {initialProfile.avatar_url ? <img src={initialProfile.avatar_url} alt="" className="size-16 rounded-full border border-border object-cover" /> : <span className="grid size-16 place-items-center rounded-full bg-avatar text-lg font-semibold text-white">N</span>}
+        <ExternalMediaImage src={initialProfile.avatar_url} className="size-16 rounded-full border border-border object-cover" fallback={<span className="grid size-16 place-items-center rounded-full bg-avatar text-white"><UserRound size={24} /></span>} />
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Profil</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-foreground">Profili düzenle</h1>
@@ -166,7 +168,7 @@ export default function ProfileEditPage() {
       <AppHeader />
       <main className="mx-auto max-w-[760px] space-y-5 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
         <Link href="/profile" className="inline-flex text-sm text-muted transition-colors hover:text-foreground">← Profile dön</Link>
-        {needsAuth ? <AuthPanel title="Profili düzenlemek için giriş yap" description="Profil bilgilerin doğrulanmış hesabınla düzenlenir." onAuthenticated={() => window.location.reload()} /> : null}
+        {needsAuth ? <NimiqConnect description="Nimiq Pay hesabını bağlayabilirsin. Bu bağlantı henüz NIMNear profil oturumu oluşturmaz." blockedMessage="Profil düzenlemek için Nimiq imzası ile backend oturumu oluşturma desteği bekleniyor." /> : null}
         {loading ? <div className="h-[500px] animate-pulse rounded-xl border border-border bg-surface" /> : null}
         {!loading && error ? <StateCard kind="error" title="Profil yüklenemedi" description="Profil servisine şu anda ulaşılamıyor. Tekrar deneyebilirsin." /> : null}
         {!loading && !error && profile && token ? <ProfileEditForm initialProfile={profile} token={token} /> : null}

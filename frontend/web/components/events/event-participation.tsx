@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-import { AuthPanel } from "@/components/auth/auth-panel";
+import { NimiqConnect } from "@/components/auth/nimiq-connect";
 import { Button } from "@/components/ui/button";
 import {
+  AuthApiError,
   clearAuthSession,
   fetchCurrentUser,
   readAuthSession,
@@ -29,7 +30,7 @@ type EventParticipationProps = {
   onStateChange?: (state: ParticipationState) => void;
 };
 
-type LoadStatus = "checking" | "anonymous" | "authenticated";
+type LoadStatus = "checking" | "anonymous" | "authenticated" | "error";
 
 export function EventParticipation({
   eventId,
@@ -51,6 +52,7 @@ export function EventParticipation({
   });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     if (!isFree || isPast) {
@@ -77,18 +79,27 @@ export function EventParticipation({
         setParticipation(nextParticipation);
         onStateChange?.(nextParticipation);
         setStatus("authenticated");
-      } catch {
+      } catch (requestError) {
         if (!active) return;
-        clearAuthSession();
-        setSession(null);
-        setStatus("anonymous");
+        const isUnauthorized =
+          (requestError instanceof AuthApiError && requestError.status === 401)
+          || (requestError instanceof ParticipationApiError && requestError.status === 401);
+        if (isUnauthorized) {
+          clearAuthSession();
+          setSession(null);
+          setStatus("anonymous");
+          setError("Oturumun sona ermiş. Nimiq imzası ile backend oturumu yenileme desteği bekleniyor.");
+          return;
+        }
+        setError(requestError instanceof Error ? requestError.message : "Katılım durumu alınamadı.");
+        setStatus("error");
       }
     }
     void restore();
     return () => {
       active = false;
     };
-  }, [eventId, isFree, isPast, onStateChange]);
+  }, [eventId, isFree, isPast, onStateChange, retryKey]);
 
   if (!isFree) return null;
 
@@ -96,28 +107,19 @@ export function EventParticipation({
     return null;
   }
 
-  async function refreshParticipation(nextSession: AuthSession) {
-    setSession(nextSession);
-    setStatus("authenticated");
-    setError(null);
-    try {
-      const nextParticipation = await fetchParticipation(eventId, nextSession.token);
-      setParticipation(nextParticipation);
-      onStateChange?.(nextParticipation);
-    } catch (requestError) {
-      if (requestError instanceof ParticipationApiError && requestError.status === 401) {
-        clearAuthSession();
-        setSession(null);
-        setStatus("anonymous");
-        setError("Oturumun sona ermiş. Tekrar giriş yapmalısın.");
-      } else {
-        setError(requestError instanceof ParticipationApiError ? requestError.message : "Katılım durumu alınamadı.");
-      }
-    }
-  }
-
   if (status === "checking") {
     return <div className="h-32 animate-pulse rounded-xl border border-border bg-surface" aria-label="Katılım durumu kontrol ediliyor" />;
+  }
+
+  if (status === "error") {
+    return (
+      <section className="rounded-xl border border-red-300/20 bg-red-400/10 p-5">
+        <p className="text-xs font-medium uppercase tracking-[0.16em] text-red-200">Katılım</p>
+        <p className="mt-2 text-sm font-medium text-foreground">Katılım durumu yüklenemedi.</p>
+        <p className="mt-1 text-xs leading-5 text-muted">{error ?? "Etkinlik servisine şu anda ulaşılamıyor."}</p>
+        <Button type="button" variant="outline" className="mt-4 w-full" onClick={() => { setError(null); setStatus("checking"); setRetryKey((value) => value + 1); }}>Tekrar dene</Button>
+      </section>
+    );
   }
 
   if (status === "anonymous") {
@@ -125,11 +127,7 @@ export function EventParticipation({
       return <Button type="button" variant="outline" disabled className="w-full">Tükendi</Button>;
     }
     return (
-      <AuthPanel
-        onAuthenticated={(nextSession) => { void refreshParticipation(nextSession); }}
-        title="Katılmak için giriş yap"
-        description="Ücretsiz etkinliklere katılmak için hesabınla devam et."
-      />
+      <NimiqConnect description="Nimiq Pay hesabını bağlayabilirsin. Bu bağlantı henüz NIMNear katılım oturumu oluşturmaz." blockedMessage="Katılım için Nimiq imzası ile backend oturumu oluşturma desteği bekleniyor." />
     );
   }
 
@@ -148,7 +146,7 @@ export function EventParticipation({
         clearAuthSession();
         setSession(null);
         setStatus("anonymous");
-        setError("Oturumun sona ermiş. Tekrar giriş yapmalısın.");
+        setError("Oturumun sona ermiş. Nimiq imzası ile backend oturumu yenileme desteği bekleniyor.");
       } else {
         setError(requestError instanceof ParticipationApiError ? requestError.message : "Katılım işlemi tamamlanamadı.");
       }

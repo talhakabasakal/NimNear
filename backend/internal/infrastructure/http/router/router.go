@@ -14,6 +14,7 @@ import (
 	// Handlers
 	apimgmtHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/apimanagement"
 	auditHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/audit"
+	calendarHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/calendar"
 	eventHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/event"
 	participationHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventparticipation"
 	eventpurchaseHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventpurchase"
@@ -63,6 +64,7 @@ type Dependencies struct {
 	PurchaseHandler      *eventpurchaseHandler.Handler
 	ProfileHandler       *profileHandler.Handler
 	PlaceHandler         *placeHandler.Handler
+	CalendarHandler      *calendarHandler.Handler
 	RealtimeHandler      *realtimeHandler.Handler
 
 	// Gateway
@@ -107,10 +109,15 @@ func New(deps Dependencies) *chi.Mux {
 		// Public place discovery does not require authentication or tenant context.
 		if deps.PlaceHandler != nil {
 			r.Get("/places/nearby", deps.PlaceHandler.ListNearby)
+			r.Get("/places/{id}", deps.PlaceHandler.Get)
 		}
 		if deps.EventHandler != nil {
 			r.Get("/events", deps.EventHandler.List)
 			r.Get("/events/{id}", deps.EventHandler.Get)
+		}
+		if deps.CalendarHandler != nil {
+			r.Get("/calendars", deps.CalendarHandler.ListPublic)
+			r.Get("/calendars/{id}", deps.CalendarHandler.GetPublic)
 		}
 		if deps.ProfileHandler != nil {
 			r.Get("/profiles/{id}", deps.ProfileHandler.GetPublic)
@@ -159,6 +166,13 @@ func New(deps Dependencies) *chi.Mux {
 
 				if deps.EventHandler != nil {
 					r.Post("/events", deps.EventHandler.Create)
+				}
+
+				if deps.CalendarHandler != nil {
+					r.Get("/me/calendars", deps.CalendarHandler.ListMine)
+					r.Post("/calendars", deps.CalendarHandler.Create)
+					r.Post("/calendars/{id}/follow", deps.CalendarHandler.Follow)
+					r.Delete("/calendars/{id}/follow", deps.CalendarHandler.Unfollow)
 				}
 
 				if deps.ParticipationHandler != nil {

@@ -5,8 +5,8 @@ export type ProfileRecord = {
   id: string;
   display_name: string;
   username: string | null;
-  bio: string;
-  avatar_url: string;
+  bio: string | null;
+  avatar_url: string | null;
   joined_at: string;
   organized_event_count: number;
   attended_event_count: number;

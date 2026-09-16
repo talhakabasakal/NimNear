@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Clock3, MapPin, Users } from "lucide-react";
+import { CalendarDays, Clock3, MapPin, UserRound, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
@@ -8,6 +8,7 @@ import { formatNimPrice, type EventRecord } from "@/lib/api/events";
 import type { ProfileRecord } from "@/lib/api/profiles";
 
 import { EventDetailHero } from "./event-detail-hero";
+import { ExternalMediaImage } from "@/components/media/external-media-image";
 import { EventParticipation } from "./event-participation";
 import { EventPurchase } from "./event-purchase";
 import { EventStatusBadge } from "./event-status-badge";
@@ -15,6 +16,7 @@ import { EventStatusBadge } from "./event-status-badge";
 type EventDetailProps = {
   event: EventRecord;
   organizer?: ProfileRecord | null;
+  organizerUnavailable?: boolean;
 };
 
 const dateFormatter = new Intl.DateTimeFormat("tr-TR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -34,7 +36,7 @@ function formatAttendance(capacity: number | null, attendeeCount: number) {
   return capacity === null ? String(attendeeCount) + " katılımcı" : String(attendeeCount) + " / " + String(capacity) + " katılımcı";
 }
 
-export function EventDetail({ event, organizer }: EventDetailProps) {
+export function EventDetail({ event, organizer, organizerUnavailable = false }: EventDetailProps) {
   const [attendance, setAttendance] = useState({ attendeeCount: event.attendee_count, isSoldOut: event.is_sold_out });
   const updateAttendance = useCallback((state: { attendee_count: number; is_sold_out: boolean }) => {
     setAttendance({ attendeeCount: state.attendee_count, isSoldOut: state.is_sold_out });
@@ -68,9 +70,10 @@ export function EventDetail({ event, organizer }: EventDetailProps) {
           <EventParticipation eventId={event.id} isFree={event.is_free} isPast={event.is_past} isSoldOut={attendance.isSoldOut} attendeeCount={attendance.attendeeCount} capacity={event.capacity} onStateChange={updateAttendance} />
           {!event.is_free ? <EventPurchase eventId={event.id} isPast={event.is_past} isSoldOut={attendance.isSoldOut} /> : null}
           {organizer ? <Link href={"/profiles/" + organizer.id} className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 transition-colors hover:bg-surface-hover">
-            {organizer.avatar_url ? <img src={organizer.avatar_url} alt="" className="size-10 rounded-full border border-border object-cover" /> : <span className="grid size-10 place-items-center rounded-full bg-avatar text-sm font-semibold text-white">{(organizer.display_name.trim() || "N").slice(0, 1).toUpperCase()}</span>}
+            <ExternalMediaImage src={organizer.avatar_url} className="size-10 rounded-full border border-border object-cover" fallback={<span className="grid size-10 place-items-center rounded-full bg-avatar text-white"><UserRound size={18} /></span>} />
             <span className="min-w-0"><span className="block text-xs text-muted">Organizatör</span><span className="mt-0.5 block truncate text-sm font-medium text-foreground">{organizer.display_name.trim() || "NIMNear kullanıcısı"}</span>{organizer.username ? <span className="block text-xs text-muted">@{organizer.username}</span> : null}</span>
           </Link> : null}
+          {!organizer && organizerUnavailable ? <section className="rounded-xl border border-border bg-surface p-4"><p className="text-xs font-medium text-foreground">Organizatör bilgisi yüklenemedi</p><p className="mt-1 text-xs leading-5 text-muted">Profil servisine şu anda ulaşılamıyor.</p></section> : null}
         </aside>
       </div>
     </article>

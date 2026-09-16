@@ -4,7 +4,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +14,7 @@ import (
 	"github.com/masterfabric-go/masterfabric/internal/gateway"
 	apimgmtHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/apimanagement"
 	auditHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/audit"
+	calendarHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/calendar"
 	eventHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/event"
 	participationHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventparticipation"
 	iamHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/iam"
@@ -32,6 +35,7 @@ func fullyWiredDeps() Dependencies {
 		TenantHandler:        &tenantHandler.Handler{},
 		APIMgmtHandler:       &apimgmtHandler.Handler{},
 		AuditHandler:         &auditHandler.Handler{},
+		CalendarHandler:      &calendarHandler.Handler{},
 		EventHandler:         &eventHandler.Handler{},
 		ParticipationHandler: &participationHandler.Handler{},
 		ProfileHandler:       &profileHandler.Handler{},
@@ -80,11 +84,18 @@ func TestNewRoutePatterns(t *testing.T) {
 		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/login",
 		"GET /api/v1/places/nearby",
+		"GET /api/v1/places/{id}",
 		"GET /api/v1/events",
 		"GET /api/v1/events/{id}",
+		"GET /api/v1/calendars",
+		"GET /api/v1/calendars/{id}",
 		"GET /api/v1/profiles/{id}",
 		"GET /api/v1/profiles/{id}/events",
 		"POST /api/v1/events",
+		"GET /api/v1/me/calendars",
+		"POST /api/v1/calendars",
+		"POST /api/v1/calendars/{id}/follow",
+		"DELETE /api/v1/calendars/{id}/follow",
 		"GET /api/v1/events/{id}/rsvp",
 		"POST /api/v1/events/{id}/rsvp",
 		"DELETE /api/v1/events/{id}/rsvp",
@@ -104,6 +115,26 @@ func TestNewRoutePatterns(t *testing.T) {
 			}
 			sort.Strings(got)
 			t.Errorf("route %q not registered; registered routes:\n  %v", w, got)
+		}
+	}
+}
+
+// TestSampleProductRouteIsNotReachable guards against reintroducing the removed
+// sample handler or a fixed product route into the NIMNear application.
+func TestSampleProductRouteIsNotReachable(t *testing.T) {
+	r := New(Dependencies{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/products", nil)
+	recorder := httptest.NewRecorder()
+
+	r.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/v1/products status = %d, want 404", recorder.Code)
+	}
+	body := recorder.Body.String()
+	for _, fabricated := range []string{"Product 1", "Product 2", "new-id"} {
+		if strings.Contains(body, fabricated) {
+			t.Fatalf("sample record %q was reachable: %s", fabricated, body)
 		}
 	}
 }

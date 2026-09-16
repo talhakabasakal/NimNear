@@ -90,6 +90,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 func parseListQuery(r *http.Request) (dto.ListEventsQuery, error) {
 	query := dto.ListEventsQuery{City: strings.TrimSpace(r.URL.Query().Get("city"))}
+	if raw := strings.TrimSpace(r.URL.Query().Get("place_id")); raw != "" {
+		placeID, err := uuid.Parse(raw)
+		if err != nil {
+			return dto.ListEventsQuery{}, domainErr.New(domainErr.ErrBadRequest, "place_id must be a valid UUID", nil)
+		}
+		query.PlaceID = &placeID
+	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil {

@@ -286,7 +286,7 @@ For the complete trust model, accepted risks, and the **Security Controls Regist
 | **Outbound HTTP proxy** | Default `http.Client` followed redirects and had no timeout, risking custom header leakage | **No redirect following**, 30s timeout, response body capped at 1 MiB | Prevents `Authorization` or service tokens from being forwarded across hosts on redirect (CWE-522) |
 | **RBAC coverage** | JWT was required but any authenticated user could call admin routes; wildcard permissions in seed data were not honored | **`RequirePermission`** on all admin routes; wildcard-aware matching (`*`, `org:*`, `*:read`) | Ensures state-changing operations require explicit grants, not just a valid token (CWE-306) |
 | **Migration script** | `migrate.sh create NAME` did not sanitize `NAME`, allowing path traversal in filenames | Name restricted to **`[a-zA-Z0-9_]`** | Blocks `../` injection when migration files are created via automation (CWE-22) |
-| **JWT secret default** | Server started silently with `change-me-in-production` | **Startup warning** when the default signing secret is detected | Makes misconfiguration visible before production exposure |
+| **JWT secret default** | Production could start with `change-me-in-production` | **Fail-closed production validation**; development keeps the documented local default | Prevents production from using a known signing secret while preserving local setup |
 | **Gateway proxy (gosec G704)** | Intentional SSRF sink for operator-configured backend URLs | Documented as an **accepted risk** in SECURITY.md with audited `#nosec` suppressions | Proxying is a core gateway feature; risk is bounded by RBAC on endpoint creation |
 
 ### Verification
@@ -309,18 +309,23 @@ Expected results on the hardened branch:
 
 Before exposing the API on a production network:
 
-1. Set a strong, random **`JWT_SECRET`** (never use the default)
-2. Set explicit **`CORS_ALLOWED_ORIGINS`** (avoid `*`)
-3. Enable **`DB_SSLMODE=require`** (or stricter)
-4. Restrict **`/metrics`** and **`/health/*`** at the network edge
-5. Replace default database credentials in any non-local deployment
+1. Set **`APP_ENV=production`**; startup rejects unknown or ambiguous environment values
+2. Set a strong, random **`JWT_SECRET`** of at least 32 characters and an explicit **`JWT_ISSUER`**
+3. Set explicit **`CORS_ALLOWED_ORIGINS`** (wildcard and empty origins are rejected)
+4. Set non-default **`DB_HOST`**, **`DB_USER`**, **`DB_PASSWORD`**, and **`DB_NAME`** values
+5. Enable **`DB_SSLMODE=require`** (or stricter)
+6. If Nimiq payment configuration is enabled, use a main-network identifier and a non-local, non-test RPC URL
+7. Restrict **`/metrics`** and **`/health/*`** at the network edge
+
+Production startup fails closed when these requirements are not met. The development defaults below are local-only and are never silently promoted to production.
 
 ## Configuration
 
-All configuration is via environment variables with sensible defaults:
+All configuration is via environment variables. The defaults below preserve local development only; `APP_ENV=production` rejects unsafe/default values before infrastructure initialization:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `APP_ENV` | `development` | Explicit mode: `development`, `test`, or `production` |
 | `SERVER_HOST` | `0.0.0.0` | Bind host |
 | `SERVER_PORT` | `8080` | Bind port |
 | `SERVER_READ_TIMEOUT_SECONDS` | `15` | HTTP read timeout |
@@ -328,12 +333,12 @@ All configuration is via environment variables with sensible defaults:
 | `SERVER_IDLE_TIMEOUT_SECONDS` | `60` | HTTP idle timeout |
 | `MAX_BODY_BYTES` | `1048576` | Maximum request body size (1 MiB) |
 | `CORS_ALLOWED_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins; credentials disabled when empty or `*` |
-| `DB_HOST` | `localhost` | PostgreSQL host |
+| `DB_HOST` | `localhost` *(development only)* | PostgreSQL host; must be explicit and non-default in production |
 | `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_USER` | `masterfabric` | PostgreSQL user |
-| `DB_PASSWORD` | `masterfabric` | PostgreSQL password |
-| `DB_NAME` | `masterfabric` | PostgreSQL database |
-| `DB_SSLMODE` | `disable` | PostgreSQL SSL mode |
+| `DB_USER` | `masterfabric` *(development only)* | PostgreSQL user; must be explicit and non-default in production |
+| `DB_PASSWORD` | `masterfabric` *(development only)* | PostgreSQL password; must be explicit and non-default in production |
+| `DB_NAME` | `masterfabric` *(development only)* | PostgreSQL database; must be explicit and non-default in production |
+| `DB_SSLMODE` | `disable` *(development only)* | PostgreSQL SSL mode; production requires TLS such as `require` |
 | `DB_MAX_CONNS` | `25` | PostgreSQL connection pool max size |
 | `DB_MIN_CONNS` | `5` | PostgreSQL connection pool min size |
 | `DB_HOST_BIND` | `127.0.0.1` | Docker Compose host bind for Postgres (dev only) |
@@ -346,8 +351,9 @@ All configuration is via environment variables with sensible defaults:
 | `KAFKA_NUM_PARTITIONS` | `3` | Default partitions for auto-created topics |
 | `KAFKA_REPLICATION_FACTOR` | `1` | Replication factor for auto-created topics |
 | `KAFKA_HOST_BIND` | `127.0.0.1` | Docker Compose host bind for Kafka (dev only) |
-| `JWT_SECRET` | `change-me-in-production` | JWT signing secret (**change before production**) |
+| `JWT_SECRET` | `change-me-in-production` *(development only)* | JWT signing secret; production requires an explicit value of at least 32 characters |
 | `JWT_EXPIRATION_HOURS` | `24` | JWT token lifetime |
+| `JWT_ISSUER` | `masterfabric` *(development only)* | JWT issuer; production requires an explicit non-default value |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `LOG_FORMAT` | `json` | Log format (json, text) |
 | `WS_ENABLED` | `true` | Enable WebSocket endpoint |

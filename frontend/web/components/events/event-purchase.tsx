@@ -3,9 +3,10 @@
 import { init } from "@nimiq/mini-app-sdk";
 import { useEffect, useRef, useState } from "react";
 
-import { AuthPanel } from "@/components/auth/auth-panel";
+import { NimiqConnect } from "@/components/auth/nimiq-connect";
 import { Button } from "@/components/ui/button";
 import {
+  AuthApiError,
   clearAuthSession,
   fetchCurrentUser,
   readAuthSession,
@@ -30,6 +31,7 @@ type EventPurchaseProps = {
 
 type ViewState =
   | "checking"
+  | "load-error"
   | "anonymous"
   | "ready"
   | "preparing"
@@ -86,6 +88,7 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
   const [session, setSession] = useState<AuthSession | null>(null);
   const [purchase, setPurchase] = useState<PurchaseRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -111,16 +114,20 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
         writeAuthSession(refreshed);
         setSession(refreshed);
         setPurchase(current);
+        setError(null);
         setState(stateForPurchase(current));
       } catch (requestError) {
         if (!active) return;
-        if (requestError instanceof PurchasesApiError && requestError.status === 401) {
+        const isUnauthorized =
+          (requestError instanceof AuthApiError && requestError.status === 401)
+          || (requestError instanceof PurchasesApiError && requestError.status === 401);
+        if (isUnauthorized) {
           clearAuthSession();
           setSession(null);
           setState("anonymous");
         } else {
-          setError(requestError instanceof PurchasesApiError ? requestError.message : "Ödeme durumu alınamadı.");
-          setState("ready");
+          setError(requestError instanceof Error ? requestError.message : "Ödeme durumu alınamadı.");
+          setState("load-error");
         }
       }
     }
@@ -129,7 +136,7 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
     return () => {
       active = false;
     };
-  }, [eventId, isPast]);
+  }, [eventId, isPast, retryKey]);
 
   useEffect(() => {
     const purchaseId = purchase?.id;
@@ -147,6 +154,7 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
         const next = await fetchPurchase(verifiedPurchaseId, verifiedSessionToken);
         if (!active) return;
         setPurchase(next);
+        setError(null);
         setState(stateForPurchase(next));
         if (next.status === "submitted" || next.status === "verifying") {
           attempts += 1;
@@ -177,6 +185,17 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
     return <div className="h-32 animate-pulse rounded-xl border border-border bg-surface" aria-label="Ödeme durumu kontrol ediliyor" />;
   }
 
+  if (state === "load-error") {
+    return (
+      <section className="rounded-xl border border-red-300/20 bg-red-400/10 p-5">
+        <p className="text-xs font-medium uppercase tracking-[0.16em] text-red-200">Ödeme</p>
+        <p className="mt-2 text-sm font-medium text-foreground">Ödeme durumu yüklenemedi.</p>
+        <p className="mt-1 text-xs leading-5 text-muted">{error ?? "Ödeme servisine şu anda ulaşılamıyor."}</p>
+        <Button type="button" variant="outline" className="mt-4 w-full" onClick={() => { setError(null); setState("checking"); setRetryKey((value) => value + 1); }}>Tekrar dene</Button>
+      </section>
+    );
+  }
+
   if (state === "confirmed") {
     return (
       <section className="rounded-xl border border-accent/30 bg-accent/10 p-5">
@@ -193,6 +212,7 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
         <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Ödeme</p>
         <p className="mt-2 text-sm font-medium text-foreground">{verificationMessage(state)}</p>
         <p className="mt-1 text-xs leading-5 text-muted">Sayfayı kapatsan da ödeme durumu hesabında korunur.</p>
+        {error ? <p className="mt-3 text-xs leading-5 text-red-200">{error}</p> : null}
       </section>
     );
   }
@@ -202,15 +222,7 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
       return <Button type="button" variant="outline" disabled className="w-full">Tükendi</Button>;
     }
     return (
-      <AuthPanel
-        onAuthenticated={(nextSession) => {
-          setSession(nextSession);
-          setState("ready");
-          setError(null);
-        }}
-        title="Satın almak için giriş yap"
-        description="Ücretli etkinliklerde ödeme yapmak için hesabınla devam et."
-      />
+      <NimiqConnect description="Nimiq Pay hesabını bağlayabilirsin. Bu bağlantı henüz NIMNear ödeme oturumu oluşturmaz." blockedMessage="Ödeme için Nimiq imzası ile backend oturumu oluşturma desteği bekleniyor. Bu bağlantı hazır olana kadar ödeme başlatılamaz." />
     );
   }
 
@@ -262,7 +274,7 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
         clearAuthSession();
         setSession(null);
         setState("anonymous");
-        setError("Oturumun sona ermiş. Tekrar giriş yapmalısın.");
+        setError("Oturumun sona ermiş. Nimiq imzası ile backend oturumu yenileme desteği bekleniyor.");
         return;
       }
       setState("ready");

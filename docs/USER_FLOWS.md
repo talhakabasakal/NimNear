@@ -30,20 +30,20 @@ The confirmed shared navigation contains:
 - Profile/avatar access
 - Theme toggle and notifications controls
 
-The `Keşfet` screen exposes city cards that lead to the confirmed İstanbul city detail page. A footer also exposes `Keşfet`, `Fiyatlandırma`, `Yardım`, and `Uygulamayı İndir` controls.
+The `Keşfet` screen exposes location-driven place cards after the user explicitly shares location. Each real place card leads to `/places/{id}`. The Figma İstanbul city-detail composition remains a visual reference; a city taxonomy/subscription surface is not implemented. A footer also exposes `Keşfet`, `Fiyatlandırma`, `Yardım`, and `Uygulamayı İndir` controls.
 
 ## Keşfet
 
 Confirmed visible hierarchy:
 
 1. Istanbul panorama hero with nearby context and event summary.
-2. Popular events section with event cards and a `Tümünü Görüntüle` action.
+2. Upcoming events section with event cards and a `Tümünü Görüntüle` action.
 3. Category grid.
 4. Featured community calendars with `Takip et` actions.
 5. Regional tabs.
-6. City cards and a larger city list.
+6. City/place discovery cards and a larger city list.
 
-Selecting a city card leads to a city detail page. Event-card detail navigation was not confirmed.
+The implemented discovery path uses backend active places and stable place IDs after explicit location permission. Event-card detail navigation was not confirmed.
 
 ## Etkinlikler
 
@@ -64,22 +64,21 @@ Confirmed visible hierarchy:
 2. `Takvimlerim` section with `Oluştur` and an empty state.
 3. `Takip edilenler` section with an empty state.
 
-The result of creating a calendar was not inspected.
+The implemented `/calendars` route uses real public calendar records, with explicit loading, empty, error, and not-found states. `/calendars/[id]` reads the active public calendar and its published/public associated events. `Takvimlerim` and `Takip edilenler` use the existing JWT-protected `/api/v1/me/calendars` endpoint. Calendar creation and follow/unfollow are protected by the legacy JWT; a native Nimiq connection without a verified backend session is clearly blocked.
 
 ## Etkinlik oluştur
 
-Confirmed visible controls include:
+Figma-confirmed controls include event name, landscape/theme, calendar visibility,
+start/end date-time, location, description, ticket price, approval, capacity,
+and the `Etkinlik oluştur` action.
 
-- Event name input.
-- Separate landscape selector: `Yok`, `Gece Gökyüzü`, `Şehir`, `Okyanus`, `Orman`, `Çöl`, `Çiçek`.
-- Theme selector: `Mor`, `Gece`, `Okyanus`, `Orman`, `Amber`, `Gül`.
-- Personal/public calendar options.
-- Start and end date/time controls.
-- Location and description controls.
-- Ticket price, approval, and capacity controls.
-- `Etkinlik oluştur` submit action.
+The current supported implementation persists event name, description,
+start/end timestamps, city, optional image URL, optional owned calendar,
+optional active place or custom address/coordinates, optional capacity, and
+exact free/paid `price_nim`. Landscape, theme, calendar visibility, and
+approval remain omitted until the backend has a persisted contract for them.
 
-The post-submit flow was not inspected.
+The current supported create flow is legacy-JWT protected. It validates the returned event ID and navigates to `/events/{id}` only after `POST /api/v1/events` succeeds. The supported persisted controls are title, description, start/end timestamps, city, optional image URL, optional owned calendar, optional active place or custom address/coordinates, optional positive capacity, and free/paid `price_nim` with exact Luna conversion. Figma-only landscape, theme, and approval controls are intentionally not rendered because they are not persisted by the current backend.
 
 ## İstanbul City Detail
 
@@ -106,7 +105,15 @@ The existing profile read flow is Figma-confirmed. Profile editing is implemente
 
 ## Location Flow
 
-Location behavior was not confirmed by the inspected Figma screens. Do not invent permission, denial, unavailable-location, or fallback transitions from this document.
+The implemented location flow is explicit and does not claim an implicit city:
+
+1. User chooses `Konumumu kullan`.
+2. Browser/WebView geolocation permission is requested.
+3. Granted coordinates are used only for the bounded nearby-place request.
+4. Denied, unsupported, timeout, backend-error, and no-nearby-place states are shown distinctly.
+5. User can continue browsing upcoming events without sharing location.
+
+Precise location is not stored as profile data and background tracking is not used.
 
 ## Unconfirmed Flows
 
@@ -117,9 +124,8 @@ The following must remain explicitly unconfirmed until the corresponding Figma s
 - visual payment-processing/success frames (not inspected in Figma);
 - ticket display;
 - QR code display;
-- calendar creation result;
 - notification behavior;
-- location permission and fallback behavior.
+- Figma-specific city subscription and neighborhood behavior.
 
 Do not add routes, tabs, or transitions for these flows based only on the mention in Figma Make history.
 
@@ -135,7 +141,7 @@ The implemented event detail page supports the following backend-confirmed behav
 - Past events do not expose an RSVP action.
 - Paid upcoming events show the price and an authenticated Satın al action. The action opens Nimiq Pay, submits the returned transaction hash, and shows submitted/verifying until backend finality confirms the purchase.
 
-Participation is user-specific and does not imply invitations, payments, tickets, QR codes, calendars, notifications, or waitlists.
+Participation is user-specific and does not imply invitations, payments, tickets, QR codes, notifications, or waitlists. Calendar ownership/follow state is a separate backend domain.
 
 
 

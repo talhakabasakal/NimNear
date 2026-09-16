@@ -17,6 +17,7 @@ import (
 	"github.com/masterfabric-go/masterfabric/internal/domain/profile/model"
 	profilerepo "github.com/masterfabric-go/masterfabric/internal/domain/profile/repository"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
+	"github.com/masterfabric-go/masterfabric/internal/shared/validator"
 )
 
 const (
@@ -182,10 +183,24 @@ func mapProfile(profile *model.PublicProfile) profiledto.PublicProfileInfo {
 		ID:                  profile.ID,
 		DisplayName:         profile.DisplayName,
 		Username:            profile.Username,
-		Bio:                 profile.Bio,
-		AvatarURL:           profile.AvatarURL,
+		Bio:                 optionalNonEmptyString(profile.Bio),
+		AvatarURL:           optionalMediaURL(profile.AvatarURL),
 		JoinedAt:            profile.JoinedAt,
 		OrganizedEventCount: profile.OrganizedEventCount,
 		AttendedEventCount:  profile.AttendedEventCount,
 	}
+}
+
+func optionalNonEmptyString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func optionalMediaURL(value string) *string {
+	if !validator.ValidMediaURL(value) || value == "" {
+		return nil
+	}
+	return &value
 }

@@ -3,12 +3,13 @@
 import { CalendarDays, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { ExternalMediaImage } from "@/components/media/external-media-image";
 
-import { AuthPanel } from "@/components/auth/auth-panel";
 import { AppHeader } from "@/components/app/app-header";
 import { StateCard } from "@/components/app/state-card";
 import { EventCard } from "@/components/events/event-card";
 import { fetchProfile, fetchProfileEvents, type ProfileRecord } from "@/lib/api/profiles";
+import { NimiqConnect } from "@/components/auth/nimiq-connect";
 import { readAuthSession } from "@/lib/api/auth";
 import type { EventRecord } from "@/lib/api/events";
 
@@ -24,11 +25,7 @@ function profileName(profile: ProfileRecord) {
 }
 
 function ProfileAvatar({ profile }: { profile: ProfileRecord }) {
-  const [hasImageError, setHasImageError] = useState(false);
-  if (profile.avatar_url && !hasImageError) {
-    return <img src={profile.avatar_url} alt="" className="size-20 rounded-full border border-border object-cover sm:size-24" onError={() => setHasImageError(true)} />;
-  }
-  return <span className="grid size-20 place-items-center rounded-full bg-avatar text-white sm:size-24"><UserRound size={30} /></span>;
+  return <ExternalMediaImage src={profile.avatar_url} className="size-20 rounded-full border border-border object-cover sm:size-24" fallback={<span className="grid size-20 place-items-center rounded-full bg-avatar text-white sm:size-24"><UserRound size={30} /></span>} />;
 }
 
 function EventSection({ title, events, emptyDescription }: { title: string; events: EventRecord[]; emptyDescription: string }) {
@@ -80,6 +77,7 @@ function ProfileContent({ profile, organized, attended, showCreateAction }: { pr
 
       <EventSection title={activeTitle} events={activeEvents} emptyDescription={activeDescription} />
       {showCreateAction && activeTab === "organized" && organized.length === 0 ? <Link href="/events/create" className="inline-flex h-10 items-center rounded-lg bg-primary px-4 text-sm font-medium text-white transition-colors hover:opacity-90">İlk etkinliğini oluştur</Link> : null}
+      {showCreateAction ? <NimiqConnect description="Nimiq Pay hesabını bağlayabilirsin. Bu bağlantı henüz NIMNear oturumu oluşturmaz." blockedMessage="Profil ve etkinlik geçmişi için Nimiq imzası ile backend oturumu oluşturma desteği bekleniyor." /> : null}
     </main>
   );
 }
@@ -125,7 +123,7 @@ export function ProfileScreen({ profileId, initialProfile }: ProfileScreenProps)
   }, [initialProfile, profileId]);
 
   if (needsAuth) {
-    return <div className="min-h-svh bg-background"><AppHeader /><main className="mx-auto max-w-[760px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8"><AuthPanel title="Profilini görmek için giriş yap" description="Profil bilgilerin ve etkinlik geçmişin doğrulanmış hesabınla görüntülenir." onAuthenticated={() => { setNeedsAuth(false); setLoading(true); window.location.reload(); }} /></main></div>;
+    return <div className="min-h-svh bg-background"><AppHeader /><main className="mx-auto max-w-[760px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8"><NimiqConnect description="Nimiq Pay hesabını bağlayabilirsin. Bu bağlantı henüz NIMNear oturumu oluşturmaz." blockedMessage="Profil ve etkinlik geçmişi için Nimiq imzası ile backend oturumu oluşturma desteği bekleniyor." /></main></div>;
   }
   if (loading) {
     return <div className="min-h-svh bg-background"><AppHeader /><main className="mx-auto max-w-[1000px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8"><div className="h-64 animate-pulse rounded-xl border border-border bg-surface" /></main></div>;

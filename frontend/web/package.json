@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "lint": "oxlint"
+    "lint": "oxlint",
+    "test:a3": "node --test tests/collection-state.test.mjs"
   },
   "dependencies": {
     "@nimiq/mini-app-sdk": "^0.1.0",

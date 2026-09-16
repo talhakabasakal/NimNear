@@ -198,15 +198,11 @@ func (p *Pipeline) Enforce(next http.Handler) http.Handler {
 			}
 		}
 
-		// Fallback: No backend handler registered, return endpoint info
-		response.JSON(w, http.StatusOK, map[string]interface{}{
-			"message":         "Endpoint validated successfully",
-			"endpoint_id":     endpoint.ID.String(),
-			"method":          endpoint.Method,
-			"path":            endpoint.Path,
-			"backend_service": endpoint.BackendService,
-			"backend_action":  endpoint.BackendAction,
-			"note":            fmt.Sprintf("No handler found for '%s'. Register a handler or configure HTTP proxy.", endpoint.BackendService),
+		// A validated endpoint without a real backend must fail closed. Returning
+		// metadata as a successful response can be mistaken for application data.
+		p.logger.Error("no backend handler available", "service", endpoint.BackendService)
+		response.JSON(w, http.StatusBadGateway, map[string]string{
+			"error": "backend service unavailable",
 		})
 		return
 
@@ -220,8 +216,8 @@ func (p *Pipeline) Enforce(next http.Handler) http.Handler {
 // responseWriter wraps http.ResponseWriter to capture response for interceptors.
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
-	header     http.Header
+	statusCode  int
+	header      http.Header
 	wroteHeader bool
 }
 
