@@ -26,10 +26,11 @@ var (
 
 // DomainError is a structured error with an underlying cause and a message.
 type DomainError struct {
-	Kind    error  // One of the sentinel errors above.
-	Code    string // Stable machine-readable error code.
-	Message string // Human-readable message.
-	Err     error  // Optional wrapped error for debugging.
+	Kind    error             // One of the sentinel errors above.
+	Code    string            // Stable machine-readable error code.
+	Message string            // Human-readable message.
+	Err     error             // Optional wrapped error for debugging.
+	Details map[string]string // Optional non-secret diagnostic fields for clients.
 }
 
 // Error implements the error interface.
@@ -64,6 +65,17 @@ func NewWithCode(kind error, code, message string, err error) *DomainError {
 	}
 }
 
+// NewWithCodeAndDetails creates a domain error with non-secret diagnostic fields.
+func NewWithCodeAndDetails(kind error, code, message string, err error, details map[string]string) *DomainError {
+	return &DomainError{
+		Kind:    kind,
+		Code:    code,
+		Message: message,
+		Err:     err,
+		Details: details,
+	}
+}
+
 // ErrorCode returns a stable client-facing code when one is present.
 func ErrorCode(err error) string {
 	var domainError *DomainError
@@ -71,6 +83,15 @@ func ErrorCode(err error) string {
 		return domainError.Code
 	}
 	return ""
+}
+
+// ErrorDetails returns non-secret diagnostic fields when present.
+func ErrorDetails(err error) map[string]string {
+	var domainError *DomainError
+	if errors.As(err, &domainError) {
+		return domainError.Details
+	}
+	return nil
 }
 
 // HTTPStatusCode maps a domain error to an HTTP status code.
@@ -107,8 +128,9 @@ func HTTPStatusCode(err error) int {
 
 // ErrorResponse is the JSON structure returned to API clients.
 type ErrorResponse struct {
-	Error     string `json:"error"`
-	ErrorCode string `json:"error_code,omitempty"`
-	Message   string `json:"message"`
-	Code      int    `json:"code"`
+	Error     string            `json:"error"`
+	ErrorCode string            `json:"error_code,omitempty"`
+	Message   string            `json:"message"`
+	Code      int               `json:"code"`
+	Details   map[string]string `json:"details,omitempty"`
 }

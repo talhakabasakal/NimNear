@@ -30,6 +30,7 @@ func Error(w http.ResponseWriter, err error) {
 		ErrorCode: domainErr.ErrorCode(err),
 		Message:   msg,
 		Code:      code,
+		Details:   domainErr.ErrorDetails(err),
 	})
 }
 

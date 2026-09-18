@@ -9,6 +9,7 @@ import {
   NIMIQ_HUB_TESTNET,
   nimiqNetworkLabel,
   parseNimiqAuthNetwork,
+  publicNimiqAuthIdentity,
   requireNimiqAuthConfig,
   resolveNimiqAuthConfig,
 } from "../../lib/auth/nimiq-network";
@@ -70,6 +71,13 @@ test("production builds do not default to TestAlbatross when unset", () => {
   assert.equal(nimiqNetworkLabel({ NODE_ENV: "production" }), "");
 });
 
+test("non-development unset configuration does not fall back to Testnet", () => {
+  const unset = resolveNimiqAuthConfig({ NODE_ENV: undefined });
+  assert.equal(unset.ok, false);
+  const testEnv = resolveNimiqAuthConfig({ NODE_ENV: "test" });
+  assert.equal(testEnv.ok, false);
+});
+
 test("production invalid configuration does not fall back to Testnet", () => {
   const config = resolveNimiqAuthConfig({
     NODE_ENV: "production",
@@ -119,6 +127,34 @@ test("createNimiqChallenge fails closed on unknown network without calling Hub",
       await assert.rejects(
         () => createNimiqChallenge(address, "hub"),
         (error: unknown) => error instanceof AuthApiError && error.code === "nimiq_network_unconfigured" && !fetched,
+      );
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
+
+test("createNimiqChallenge surfaces backend network mismatch diagnostics", async () => {
+  await withPublicNetwork("test-albatross", async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: "Bad Request",
+      error_code: "unsupported_nimiq_network",
+      message: "bad request: Nimiq network does not match this deployment (requested_network=test-albatross requested_environment=testnet expected_network=main-albatross expected_environment=mainnet)",
+      details: {
+        requested_network: "test-albatross",
+        requested_environment: "testnet",
+        expected_network: "main-albatross",
+        expected_environment: "mainnet",
+      },
+    }), { status: 400, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+    try {
+      await assert.rejects(
+        () => createNimiqChallenge(address, "hub"),
+        (error: unknown) => error instanceof AuthApiError
+          && error.code === "unsupported_nimiq_network"
+          && error.message.includes("requested_network=test-albatross")
+          && error.message.includes("expected_network=main-albatross"),
       );
     } finally {
       globalThis.fetch = previousFetch;
@@ -197,4 +233,23 @@ test("Hub fallback can be disabled for Mini App-only production", () => {
   assert.equal(isNimiqHubEnabled({}), true);
   assert.equal(isNimiqHubEnabled({ NEXT_PUBLIC_NIMNEAR_HUB_ENABLED: "false" }), false);
   assert.equal(isNimiqHubEnabled({ NEXT_PUBLIC_NIMNEAR_HUB_ENABLED: "true" }), true);
+});
+
+test("public identity exposes only non-secret production network metadata", () => {
+  const identity = publicNimiqAuthIdentity({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "main-albatross" });
+  assert.equal(identity.configured, true);
+  if (!identity.configured) return;
+  assert.equal(identity.network, "main-albatross");
+  assert.equal(identity.environment, "mainnet");
+  assert.equal(identity.consensus, "MainAlbatross");
+  assert.equal(identity.networkId, 24);
+  assert.equal(identity.hub, NIMIQ_HUB_MAINNET);
+});
+
+test("next.config force-inlines the canonical network without importing client env reads", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const config = await readFile(new URL("../../next.config.ts", import.meta.url), "utf8");
+  assert.match(config, /NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: configuredNimiqNetwork\.network/);
+  assert.match(config, /from "\.\/lib\/auth\/nimiq-albatross"/);
+  assert.doesNotMatch(config, /nimiq-network|nimiq-public-env/);
 });

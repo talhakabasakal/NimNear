@@ -28,6 +28,20 @@ export type NimiqChallenge = {
 
 type VerifyNimiqInput = { challenge_id: string; message: string; public_key: string; signature: string; account_label?: string };
 
+const AUTH_NETWORK_DETAIL_KEYS = [
+  "requested_network",
+  "requested_environment",
+  "expected_network",
+  "expected_environment",
+] as const;
+
+type AuthErrorPayload = {
+  message?: string;
+  error?: string;
+  error_code?: string;
+  details?: Partial<Record<(typeof AUTH_NETWORK_DETAIL_KEYS)[number], string>>;
+};
+
 export class AuthApiError extends Error {
   constructor(public readonly status: number, message = "Authentication request failed", public readonly code = "") {
     super(message); this.name = "AuthApiError";
@@ -41,8 +55,20 @@ export function isLostSessionStatus(status: number) {
 const sessionKey = "nimnear.auth.session";
 
 async function throwAuthApiError(response: Response): Promise<never> {
-  const payload = (await response.json().catch(() => null)) as { message?: string; error?: string; error_code?: string } | null;
-  throw new AuthApiError(response.status, payload?.message ?? payload?.error ?? "Authentication request failed", payload?.error_code ?? "");
+  const payload = (await response.json().catch(() => null)) as AuthErrorPayload | null;
+  throw new AuthApiError(response.status, formatAuthApiErrorMessage(payload), payload?.error_code ?? "");
+}
+
+function formatAuthApiErrorMessage(payload: AuthErrorPayload | null) {
+  const base = payload?.message ?? payload?.error ?? "Authentication request failed";
+  const extras = AUTH_NETWORK_DETAIL_KEYS
+    .map((key) => {
+      const value = payload?.details?.[key]?.trim();
+      return value ? `${key}=${value}` : "";
+    })
+    .filter(Boolean);
+  if (extras.length === 0 || extras.every((part) => base.includes(part))) return base;
+  return `${base} (${extras.join(" ")})`;
 }
 
 export async function createNimiqChallenge(walletAddress: string, transport: NimiqTransport): Promise<NimiqChallenge> {
@@ -58,6 +84,13 @@ export async function createNimiqChallenge(walletAddress: string, transport: Nim
   const challenge = (await response.json()) as NimiqChallenge;
   if (!challenge.challenge_id || !challenge.message || challenge.wallet_address !== walletAddress && challenge.wallet_address.replace(/\s/g, "") !== walletAddress.replace(/\s/g, "")) {
     throw new AuthApiError(502, "The server returned an invalid authentication message.", "malformed_challenge_response");
+  }
+  if (challenge.network !== network.network || challenge.environment !== network.environment) {
+    throw new AuthApiError(
+      502,
+      `The server returned a Nimiq network that does not match this client (requested_network=${network.network} requested_environment=${network.environment} returned_network=${challenge.network} returned_environment=${challenge.environment}).`,
+      "nimiq_network_mismatch",
+    );
   }
   return challenge;
 }

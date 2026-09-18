@@ -127,8 +127,19 @@ func TestCreateChallengeRejectsDeploymentMismatch(t *testing.T) {
 		{Address: "NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604", Network: "test-albatross", Environment: "mainnet", Purpose: "AUTH_LOGIN", Transport: "hub"},
 	}
 	for _, req := range cases {
-		if _, err := NewNimiqAuthUseCase(&authRepoStub{}, authServiceStub{}, testAuthConfig()).CreateChallenge(context.Background(), req); err == nil {
+		_, err := NewNimiqAuthUseCase(&authRepoStub{}, authServiceStub{}, testAuthConfig()).CreateChallenge(context.Background(), req)
+		if err == nil {
 			t.Fatal("expected mismatch rejection")
+		}
+		var domainError *domainErr.DomainError
+		if !errors.As(err, &domainError) {
+			t.Fatalf("error type %T", err)
+		}
+		if domainError.Details["expected_network"] != "test-albatross" || domainError.Details["expected_environment"] != "testnet" {
+			t.Fatalf("missing expected network details: %#v", domainError.Details)
+		}
+		if !strings.Contains(domainError.Message, "requested_network=") || !strings.Contains(domainError.Message, "expected_network=test-albatross") {
+			t.Fatalf("diagnostic missing from message: %q", domainError.Message)
 		}
 	}
 }

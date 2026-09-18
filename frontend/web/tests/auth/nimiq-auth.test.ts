@@ -44,11 +44,13 @@ import {
   clearPendingHubAuthentication,
   completeHubAuthentication,
   createHubChallenge,
+  discardStaleHubAuthState,
   finishHubSignature,
   hasHubUiIntent,
   hubRedirectBehavior,
   NIMIQ_HUB_PUBLIC_METHODS,
   persistPendingHubAuthentication,
+  persistSelectedHubAddress,
   readPendingHubAuthentication,
   requestMiniAppWallet,
   resetHubRedirectConsumption,
@@ -59,6 +61,8 @@ import {
 import type { AuthSession, NimiqChallenge } from "../../lib/api/auth";
 import { clearAuthSession, readAuthSession, writeAuthSession } from "../../lib/api/auth";
 import { withAuthSession } from "../../lib/api/session-request";
+
+process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK ??= "test-albatross";
 
 const address = "NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604";
 const challenge: NimiqChallenge = { challenge_id: "11111111-1111-1111-1111-111111111111", message: "exact\ncanonical\nmessage", wallet_address: address, network: "test-albatross", environment: "testnet", purpose: "AUTH_LOGIN", transport: "mini-app", issued_at: "2026-09-17T12:00:00Z", expires_at: "2026-09-17T12:05:00Z" };
@@ -207,6 +211,8 @@ test("browser Hub uses redirect behavior so Hub receives the request in the URL"
 test("pending Hub challenge survives the redirect return", () => {
   const previous = globalThis.window;
   globalThis.window = { sessionStorage: memoryStorage() } as never;
+  const previousNetwork = process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+  process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = "test-albatross";
   try {
     const pending = { transport: "hub" as const, address, challenge: { ...challenge, transport: "hub" as const } };
     persistPendingHubAuthentication(pending);
@@ -215,6 +221,31 @@ test("pending Hub challenge survives the redirect return", () => {
     clearPendingHubAuthentication();
     assert.equal(readPendingHubAuthentication(), null);
   } finally {
+    if (previousNetwork == null) delete process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+    else process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = previousNetwork;
+    globalThis.window = previous;
+  }
+});
+
+test("stale Testnet Hub pending state is discarded after a Mainnet deploy", () => {
+  const previous = globalThis.window;
+  const storage = memoryStorage();
+  globalThis.window = { sessionStorage: storage } as never;
+  const previousNetwork = process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+  try {
+    process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = "test-albatross";
+    persistPendingHubAuthentication({ transport: "hub", address, challenge: { ...challenge, transport: "hub" } });
+    persistSelectedHubAddress(address, "Teal Address");
+    storage.setItem("rpcRequests", JSON.stringify({ "42": ["choose-address", { phase: "choose-address" }] }));
+    process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = "main-albatross";
+    discardStaleHubAuthState();
+    assert.equal(readPendingHubAuthentication(), null);
+    assert.equal(storage.getItem("nimnear.auth.hub.pending"), null);
+    assert.equal(storage.getItem("nimnear.auth.hub.selectedAddress"), null);
+    assert.equal(storage.getItem("rpcRequests"), null);
+  } finally {
+    if (previousNetwork == null) delete process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+    else process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = previousNetwork;
     globalThis.window = previous;
   }
 });

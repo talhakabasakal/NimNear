@@ -26,8 +26,23 @@ const APP_NAME = "NIMNear";
 const PENDING_HUB_KEY = "nimnear.auth.hub.pending";
 const SELECTED_HUB_ADDRESS_KEY = "nimnear.auth.hub.selectedAddress";
 const SELECTED_HUB_LABEL_KEY = "nimnear.auth.hub.accountLabel";
+const SELECTED_HUB_NETWORK_KEY = "nimnear.auth.hub.network";
 const HUB_UI_KEY = "nimnear.auth.hub.ui";
 const RPC_REQUESTS_KEY = "rpcRequests";
+const HUB_AUTH_STATE_VERSION = 2;
+
+type HubAuthIdentity = {
+  network: string;
+  environment: string;
+  hubEndpoint: string;
+};
+
+type StoredPendingHubAuthentication = PendingHubAuthentication & {
+  v: number;
+  network: string;
+  environment: string;
+  hubEndpoint: string;
+};
 
 export type NimiqAuthTransport = "mini-app" | "hub";
 export type AuthStage =
@@ -94,6 +109,7 @@ type HubRedirectClient = {
 };
 
 let hubApi: HubApi | null = null;
+let hubApiEndpoint: string | null = null;
 let redirectWaiter: Promise<HubRedirectResult> | null = null;
 let capturedHubRedirect: HubRedirectResult | null = null;
 let capturedHubRedirectRead = false;
@@ -116,17 +132,81 @@ function getHubApi() {
   if (!network.ok) {
     throw new NimiqAuthError("detecting-environment", network.code, network.message);
   }
-  hubApi ??= new HubApi(network.hubEndpoint);
+  if (!hubApi || hubApiEndpoint !== network.hubEndpoint) {
+    hubApi = new HubApi(network.hubEndpoint);
+    hubApiEndpoint = network.hubEndpoint;
+  }
   return hubApi;
+}
+
+function currentHubAuthIdentity(): HubAuthIdentity | null {
+  const network = resolveNimiqAuthConfig();
+  if (!network.ok) return null;
+  return { network: network.network, environment: network.environment, hubEndpoint: network.hubEndpoint };
+}
+
+function hubAuthIdentityKey(identity: HubAuthIdentity) {
+  return `${identity.network}|${identity.environment}|${identity.hubEndpoint}`;
+}
+
+function clearHubRpcRequests() {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(RPC_REQUESTS_KEY);
+}
+
+export function discardStaleHubAuthState() {
+  if (typeof window === "undefined") return;
+  const identity = currentHubAuthIdentity();
+  const storedPending = window.sessionStorage.getItem(PENDING_HUB_KEY);
+  if (storedPending) {
+    try {
+      const pending = JSON.parse(storedPending) as StoredPendingHubAuthentication;
+      if (!isCurrentPendingHubAuthentication(pending, identity)) {
+        clearPendingHubAuthentication();
+        clearHubRpcRequests();
+      }
+    } catch {
+      clearPendingHubAuthentication();
+      clearHubRpcRequests();
+    }
+  }
+  const storedIdentity = window.sessionStorage.getItem(SELECTED_HUB_NETWORK_KEY);
+  if (!identity || storedIdentity !== hubAuthIdentityKey(identity)) {
+    window.sessionStorage.removeItem(SELECTED_HUB_ADDRESS_KEY);
+    window.sessionStorage.removeItem(SELECTED_HUB_LABEL_KEY);
+    window.sessionStorage.removeItem(SELECTED_HUB_NETWORK_KEY);
+    if (storedIdentity) clearHubRpcRequests();
+  }
+}
+
+function isCurrentPendingHubAuthentication(
+  pending: StoredPendingHubAuthentication,
+  identity: HubAuthIdentity | null,
+): pending is StoredPendingHubAuthentication {
+  return Boolean(
+    identity &&
+      pending.v === HUB_AUTH_STATE_VERSION &&
+      pending.transport === "hub" &&
+      pending.address &&
+      pending.challenge?.challenge_id &&
+      pending.challenge.message &&
+      pending.network === identity.network &&
+      pending.environment === identity.environment &&
+      pending.hubEndpoint === identity.hubEndpoint &&
+      pending.challenge.network === identity.network &&
+      pending.challenge.environment === identity.environment,
+  );
 }
 
 export function prepareNimiqHub() {
   if (typeof window === "undefined") return;
+  discardStaleHubAuthState();
   captureHubRedirectFromLocation();
   try {
     void getHubApi();
   } catch {
     hubApi = null;
+    hubApiEndpoint = null;
   }
 }
 
@@ -241,13 +321,16 @@ function captureHubRedirectFromLocation() {
 
 export function persistSelectedHubAddress(address: string, accountLabel?: string) {
   if (typeof window === "undefined") return;
+  const identity = currentHubAuthIdentity();
   window.sessionStorage.setItem(SELECTED_HUB_ADDRESS_KEY, address);
+  if (identity) window.sessionStorage.setItem(SELECTED_HUB_NETWORK_KEY, hubAuthIdentityKey(identity));
   if (accountLabel) window.sessionStorage.setItem(SELECTED_HUB_LABEL_KEY, accountLabel);
   markHubUiIntent();
 }
 
 export function readSelectedHubAddress(): string | null {
   if (typeof window === "undefined") return null;
+  discardStaleHubAuthState();
   return window.sessionStorage.getItem(SELECTED_HUB_ADDRESS_KEY);
 }
 
@@ -260,6 +343,7 @@ export function clearSelectedHubAddress() {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(SELECTED_HUB_ADDRESS_KEY);
   window.sessionStorage.removeItem(SELECTED_HUB_LABEL_KEY);
+  window.sessionStorage.removeItem(SELECTED_HUB_NETWORK_KEY);
 }
 
 function isErrorResponse(value: unknown): value is ErrorResponse {
@@ -361,21 +445,40 @@ export async function authenticateMiniApp(
 
 export function persistPendingHubAuthentication(pending: PendingHubAuthentication) {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(PENDING_HUB_KEY, JSON.stringify(pending));
+  const identity = currentHubAuthIdentity();
+  if (!identity) {
+    window.sessionStorage.removeItem(PENDING_HUB_KEY);
+    return;
+  }
+  const stored: StoredPendingHubAuthentication = {
+    ...pending,
+    v: HUB_AUTH_STATE_VERSION,
+    network: identity.network,
+    environment: identity.environment,
+    hubEndpoint: identity.hubEndpoint,
+  };
+  window.sessionStorage.setItem(PENDING_HUB_KEY, JSON.stringify(stored));
   markHubUiIntent();
 }
 
 export function readPendingHubAuthentication(): PendingHubAuthentication | null {
   if (typeof window === "undefined") return null;
+  discardStaleHubAuthState();
   const stored = window.sessionStorage.getItem(PENDING_HUB_KEY);
   if (!stored) return null;
   try {
-    const pending = JSON.parse(stored) as PendingHubAuthentication;
-    if (pending.transport !== "hub" || !pending.address || !pending.challenge?.challenge_id || !pending.challenge.message) {
+    const pending = JSON.parse(stored) as StoredPendingHubAuthentication;
+    const identity = currentHubAuthIdentity();
+    if (!isCurrentPendingHubAuthentication(pending, identity)) {
       window.sessionStorage.removeItem(PENDING_HUB_KEY);
       return null;
     }
-    return pending;
+    return {
+      transport: "hub",
+      address: pending.address,
+      ...(pending.accountLabel ? { accountLabel: pending.accountLabel } : {}),
+      challenge: pending.challenge,
+    };
   } catch {
     window.sessionStorage.removeItem(PENDING_HUB_KEY);
     return null;
@@ -562,6 +665,7 @@ export function resetHubRedirectConsumption() {
   verificationInFlight = null;
   challengeInFlight.clear();
   hubApi = null;
+  hubApiEndpoint = null;
 }
 
 async function submitVerification(

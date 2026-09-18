@@ -113,10 +113,10 @@ func (uc *NimiqAuthUseCase) CreateChallenge(ctx context.Context, req NimiqChalle
 	}
 	requestedNetwork, err := nimiqnet.ParseNetwork(req.Network)
 	if err != nil || requestedNetwork.ID != configuredNetwork.ID {
-		return nil, domainErr.NewWithCode(domainErr.ErrBadRequest, "unsupported_nimiq_network", "Nimiq network does not match this deployment", nil)
+		return nil, networkMismatchError("unsupported_nimiq_network", "Nimiq network does not match this deployment", req.Network, req.Environment, configuredNetwork)
 	}
 	if req.Environment != configuredNetwork.Environment {
-		return nil, domainErr.NewWithCode(domainErr.ErrBadRequest, "environment_mismatch", "authentication environment does not match this deployment", nil)
+		return nil, networkMismatchError("environment_mismatch", "authentication environment does not match this deployment", req.Network, req.Environment, configuredNetwork)
 	}
 
 	nonce := make([]byte, 32)
@@ -150,10 +150,17 @@ func (uc *NimiqAuthUseCase) Verify(ctx context.Context, req NimiqVerifyRequest) 
 		return nil, domainErr.NewWithCode(domainErr.ErrBadRequest, "challenge_message_mismatch", "signed message does not match the server challenge", nil)
 	}
 	if !nimiqnet.SameEnvironment(challenge.Network, uc.config.Network) {
-		return nil, domainErr.NewWithCode(domainErr.ErrBadRequest, "network_mismatch", "authentication challenge network mismatch", nil)
+		configuredNetwork, parseErr := nimiqnet.ParseNetwork(uc.config.Network)
+		if parseErr != nil {
+			return nil, domainErr.NewWithCode(domainErr.ErrBadRequest, "network_mismatch", "authentication challenge network mismatch", nil)
+		}
+		return nil, networkMismatchError("network_mismatch", "authentication challenge network mismatch", challenge.Network, challenge.Environment, configuredNetwork)
 	}
 	configuredNetwork, err := nimiqnet.ParseNetwork(uc.config.Network)
 	if err != nil || challenge.Environment != configuredNetwork.Environment || challenge.Domain != uc.config.Domain || challenge.Audience != NimiqAuthAudience || challenge.Purpose != NimiqAuthPurpose {
+		if err == nil && challenge.Environment != configuredNetwork.Environment {
+			return nil, networkMismatchError("environment_mismatch", "authentication challenge deployment binding mismatch", challenge.Network, challenge.Environment, configuredNetwork)
+		}
 		return nil, domainErr.NewWithCode(domainErr.ErrBadRequest, "environment_mismatch", "authentication challenge deployment binding mismatch", nil)
 	}
 
@@ -234,6 +241,56 @@ func DisplayNameForWallet(address, accountLabel string) string {
 		return label
 	}
 	return address
+}
+
+func networkMismatchError(code, message, requestedNetwork, requestedEnvironment string, expected nimiqnet.Network) error {
+	details := map[string]string{
+		"requested_network":     publicNetworkName(requestedNetwork),
+		"requested_environment": publicEnvironmentName(requestedEnvironment),
+		"expected_network":      expected.AuthName,
+		"expected_environment":  expected.Environment,
+	}
+	return domainErr.NewWithCodeAndDetails(
+		domainErr.ErrBadRequest,
+		code,
+		fmt.Sprintf("%s (requested_network=%s requested_environment=%s expected_network=%s expected_environment=%s)", message, details["requested_network"], details["requested_environment"], details["expected_network"], details["expected_environment"]),
+		nil,
+		details,
+	)
+}
+
+func publicNetworkName(value string) string {
+	if parsed, err := nimiqnet.ParseNetwork(value); err == nil {
+		return parsed.AuthName
+	}
+	return publicConfigToken(value)
+}
+
+func publicEnvironmentName(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case nimiqnet.EnvironmentTestnet:
+		return nimiqnet.EnvironmentTestnet
+	case nimiqnet.EnvironmentMainnet:
+		return nimiqnet.EnvironmentMainnet
+	default:
+		return publicConfigToken(value)
+	}
+}
+
+func publicConfigToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unset"
+	}
+	if utf8.RuneCountInString(value) > 32 {
+		return "invalid"
+	}
+	for _, r := range value {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
+			return "invalid"
+		}
+	}
+	return value
 }
 
 func SignedBytes(transport, message string) ([]byte, error) {
