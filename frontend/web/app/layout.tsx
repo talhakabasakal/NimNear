@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import "./globals.css";
@@ -21,13 +21,23 @@ const themeScript = `
 
 const publicOrigin = process.env.NEXT_PUBLIC_NIMNEAR_PUBLIC_ORIGIN?.trim();
 
+export const viewport: Viewport = {
+  themeColor: "#0f0e10",
+};
+
 export const metadata: Metadata = {
+  applicationName: "NIMNear",
   title: {
     default: "NIMNear",
     template: "%s · NIMNear",
   },
   description: "Discover nearby places and events, and pay with NIM.",
   ...(publicOrigin ? { metadataBase: new URL(publicOrigin) } : {}),
+  appleWebApp: {
+    capable: true,
+    title: "NIMNear",
+    statusBarStyle: "black-translucent",
+  },
   openGraph: {
     title: "NIMNear",
     description: "Discover nearby places and events, and pay with NIM.",
