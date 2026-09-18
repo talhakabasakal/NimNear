@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarDays, Compass, Plus, Sparkles, Wallet } from "lucide-react";
+import { CalendarDays, Compass, Plus, Wallet } from "lucide-react";
 
 import { ProfileButton } from "@/components/app/profile-button";
 import { ThemeToggle } from "@/components/app/theme-toggle";
@@ -17,7 +17,14 @@ export function AppHeader() {
     <header className="event-create-header sticky top-0 z-20 border-b border-border/80 bg-background/90 backdrop-blur-xl">
       <div className="mx-auto flex min-h-[53px] max-w-[1240px] items-center gap-2 px-3 sm:gap-4 sm:px-6 lg:px-8">
         <Link href="/" className="flex min-h-11 min-w-11 shrink-0 items-center gap-2" aria-label="NIMNear home page">
-          <span className="grid size-8 place-items-center rounded-lg bg-primary text-white"><Sparkles size={16} strokeWidth={2.2} /></span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/nimnear-logo.png"
+            alt=""
+            width={32}
+            height={32}
+            className="size-8 object-contain"
+          />
           <span className="hidden text-[15px] font-semibold tracking-[-0.02em] sm:inline">NIMNear</span>
         </Link>
 
