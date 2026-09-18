@@ -60,6 +60,12 @@ test("the wallet page remains in the app while Discover redirects to Events", ()
   assert.match(walletPage, /WalletScreen/);
   assert.match(nextConfig, /source: "\/discover"/);
   assert.match(nextConfig, /destination: "\/"/);
+  const layout = fs.readFileSync(
+    new URL("../../app/layout.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(layout, /AppProviders/);
+  assert.match(layout, /nimnear.auth.hub.rpcCallback/);
   assert.match(header, /NimiqConnect/);
-  assert.match(header, /restoreOnly/);
+  assert.doesNotMatch(header, /restoreOnly/);
 });

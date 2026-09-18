@@ -25,10 +25,12 @@ export function AppHeader() {
 
         <div className="flex shrink-0 items-center gap-1">
           <ThemeToggle />
+          <span className="hidden sm:inline-flex">
+            <NimiqConnect hideWhenAuthenticated />
+          </span>
           <ProfileButton />
         </div>
       </div>
-      <NimiqConnect restoreOnly hideWhenAuthenticated />
     </header>
   );
 }

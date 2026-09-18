@@ -13,17 +13,47 @@ import { PUBLIC_NODE_ENV } from "@/lib/auth/nimiq-public-env";
 import {
   AuthApiError,
   createNimiqChallenge,
+  restoreAuthSession,
   verifyNimiqChallenge,
   type AuthSession,
   type NimiqChallenge,
 } from "@/lib/api/auth";
 import { isNimiqHubEnabled, resolveNimiqAuthConfig } from "@/lib/auth/nimiq-network";
+import {
+  callbackOperationFromCommand,
+  HUB_AUTH_CONTINUATION_VERSION,
+  isHistoryStateCloneError,
+  NIMIQ_HUB_CALLBACK_STORAGE_KEY,
+  NIMIQ_HUB_CONTINUATION_KEY,
+  phaseFromAuthStage,
+  redactWalletAddress,
+  userMessageForAuthPhase,
+  type AuthPhase,
+  type AuthStage,
+  type HubAuthContinuation,
+  type HubAuthFailureDiagnostics,
+  type HubCallbackMeta,
+  type StoredHubRpcCallback,
+} from "@/lib/auth/nimiq-auth-phase";
 
 export {
   isNimiqHubEnabled,
   requireNimiqAuthConfig,
   resolveNimiqAuthConfig,
 } from "@/lib/auth/nimiq-network";
+export {
+  HUB_AUTH_CONTINUATION_VERSION,
+  NIMIQ_HUB_CALLBACK_STORAGE_KEY,
+  NIMIQ_HUB_CONTINUATION_KEY,
+  phaseFromAuthStage,
+  redactWalletAddress,
+  userMessageForAuthPhase,
+  type AuthPhase,
+  type AuthStage,
+  type HubAuthContinuation,
+  type HubAuthFailureDiagnostics,
+  type HubCallbackMeta,
+} from "@/lib/auth/nimiq-auth-phase";
 export const NIMIQ_HUB_PUBLIC_METHODS = ["chooseAddress", "signMessage"] as const;
 export const NIMIQ_HUB_PAYMENT_METHODS = ["checkout"] as const;
 const APP_NAME = "NIMNear";
@@ -34,6 +64,7 @@ const SELECTED_HUB_NETWORK_KEY = "nimnear.auth.hub.network";
 const HUB_UI_KEY = "nimnear.auth.hub.ui";
 const RPC_REQUESTS_KEY = "rpcRequests";
 const HUB_AUTH_STATE_VERSION = 2;
+const HUB_CALLBACK_STORAGE_VERSION = 1;
 
 type HubAuthIdentity = {
   network: string;
@@ -49,45 +80,24 @@ type StoredPendingHubAuthentication = PendingHubAuthentication & {
 };
 
 export type NimiqAuthTransport = "mini-app" | "hub";
-export type AuthStage =
-  | "idle"
-  | "detecting-environment"
-  | "requesting-wallet"
-  | "selecting-account"
-  | "requesting-challenge"
-  | "awaiting-signature"
-  | "requesting-signature"
-  | "verifying-signature"
-  | "creating-session"
-  | "restoring-session"
-  | "authenticated";
 
 export class NimiqAuthError extends Error {
   override readonly cause?: unknown;
+  readonly phase: AuthPhase;
   constructor(
     public readonly stage: AuthStage,
     public readonly code: string,
     message: string,
     public readonly cancelled = false,
     cause?: unknown,
+    phase?: AuthPhase,
   ) {
     super(message);
     this.name = "NimiqAuthError";
+    this.phase = phase ?? phaseFromAuthStage(stage);
     if (cause !== undefined) this.cause = cause;
   }
 }
-
-export type HubAuthFailureDiagnostics = {
-  errorName: string;
-  errorMessage: string;
-  requestPhase: string;
-  hubEndpoint: string;
-  pathname: string;
-  returnUrl: string;
-  network: string;
-  environment: string;
-  consensus: string;
-};
 
 export type MiniAppWallet = {
   transport: "mini-app";
@@ -107,8 +117,17 @@ export type HubRedirectResult =
   | { type: "signature"; signed: SignedMessage }
   | { type: "checkout"; hash: string }
   | { type: "checkout-error"; error: unknown }
-  | { type: "error"; error: unknown; stage: AuthStage }
+  | { type: "error"; error: unknown; stage: AuthStage; phase?: AuthPhase }
   | { type: "empty" };
+
+export type HubAuthResumeResult =
+  | { type: "authenticated"; session: AuthSession; phase: AuthPhase }
+  | { type: "redirecting"; phase: AuthPhase; pending?: PendingHubAuthentication }
+  | { type: "awaiting-signature"; pending: PendingHubAuthentication; phase: AuthPhase }
+  | { type: "idle"; phase: AuthPhase }
+  | { type: "payment"; phase: AuthPhase }
+  | { type: "cancelled"; phase: AuthPhase }
+  | { type: "error"; error: NimiqAuthError; phase: AuthPhase };
 
 type HubChooseAddressClient = {
   chooseAddress: (
@@ -136,6 +155,8 @@ let capturedHubRedirect: HubRedirectResult | null = null;
 let capturedHubRedirectRead = false;
 let hubSignRedirectStarted = false;
 let hubReturnRestoreClaimed = false;
+let hubAuthResume: Promise<HubAuthResumeResult> | null = null;
+let hubCallbackConsumeCount = 0;
 const challengeInFlight = new Map<string, Promise<PendingHubAuthentication>>();
 let verificationInFlight: Promise<AuthSession> | null = null;
 
@@ -186,6 +207,11 @@ function clearHubRpcRequests() {
   window.sessionStorage.removeItem(RPC_REQUESTS_KEY);
 }
 
+function clearHubAuthContinuation() {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(NIMIQ_HUB_CONTINUATION_KEY);
+}
+
 export function discardStaleHubAuthState() {
   if (typeof window === "undefined") return;
   const identity = currentHubAuthIdentity();
@@ -208,6 +234,18 @@ export function discardStaleHubAuthState() {
     window.sessionStorage.removeItem(SELECTED_HUB_LABEL_KEY);
     window.sessionStorage.removeItem(SELECTED_HUB_NETWORK_KEY);
     if (storedIdentity) clearHubRpcRequests();
+  }
+  const continuation = readHubAuthContinuation();
+  if (continuation && identity) {
+    if (
+      continuation.network !== identity.network ||
+      continuation.environment !== identity.environment ||
+      continuation.hubEndpoint !== identity.hubEndpoint
+    ) {
+      clearHubAuthContinuation();
+    }
+  } else if (continuation && !identity) {
+    clearHubAuthContinuation();
   }
 }
 
@@ -233,6 +271,7 @@ function isCurrentPendingHubAuthentication(
 export function prepareNimiqHub() {
   if (typeof window === "undefined") return;
   discardStaleHubAuthState();
+  captureHubRpcCallbackFromWindow();
   captureHubRedirectFromLocation();
   try {
     void getHubApi();
@@ -256,12 +295,11 @@ export function hubRedirectBehavior(localState: Record<string, string> = {}) {
   }
   const returnUrl = hubReturnUrl();
   const behavior = new HubApi.RedirectRequestBehavior(returnUrl, localState);
-  // Hub's default redirect sets history.replaceState({...Next.js state, rpcBackRejectionId})
-  // before navigating. Next.js App Router history state can throw DataCloneError, and Back
-  // then rejects with "Request aborted" which used to surface as "wallet could not be reached".
+  // Do not call RedirectRpcClient.init() here. init() parses the current URL as a
+  // Hub *response*, can throw DataCloneError via history.replaceState(Next.js state),
+  // and can consume the other half of a two-step auth flow (chooseAddress vs signMessage).
   behavior.request = async (endpoint, command, args) => {
     const client = new RedirectRpcClient(endpoint, new URL(endpoint).origin);
-    await client.init();
     client.call(
       returnUrl,
       command,
@@ -334,8 +372,10 @@ function interpretHubRpcResult(command: string | null, status: "ok" | "error", r
     if (command === HubApi.RequestType.CHECKOUT) {
       return { type: "checkout-error", error: hubRpcErrorValue(result) };
     }
-    const stage: AuthStage = command === HubApi.RequestType.SIGN_MESSAGE ? "requesting-signature" : "requesting-wallet";
-    return { type: "error", error: wrapWalletError(stage, hubRpcErrorValue(result)), stage };
+    const restore = command === HubApi.RequestType.SIGN_MESSAGE;
+    const stage: AuthStage = restore ? "requesting-signature" : "requesting-wallet";
+    const phase: AuthPhase = restore ? "restore-signature" : "restore-address";
+    return { type: "error", error: wrapWalletError(stage, hubRpcErrorValue(result), phase), stage, phase };
   }
   if (command === HubApi.RequestType.CHECKOUT || isSignedHubTransaction(result)) {
     const hash = checkoutHashFromResult(result);
@@ -357,33 +397,141 @@ function interpretHubRpcResult(command: string | null, status: "ok" | "error", r
   return { type: "empty" };
 }
 
-function readAndClearHubRedirectHash(): HubRedirectResult | null {
-  if (typeof window === "undefined") return null;
-  const fragment = new URLSearchParams(window.location.hash.substring(1));
-  const idRaw = fragment.get("id");
-  const statusRaw = fragment.get("status");
-  const resultRaw = fragment.get("result");
-  if (!idRaw || !statusRaw || resultRaw == null) return null;
-  const id = Number.parseInt(idRaw, 10);
-  if (!Number.isFinite(id)) return null;
-  let result: unknown;
+function replaceLocationUrl(href: string) {
   try {
-    result = parseHubRpcJson(resultRaw);
+    window.history.replaceState(window.history.state, "", href);
+    return;
   } catch {
-    return null;
+    // Next.js App Router history.state is often not structured-cloneable.
   }
-  const interpreted = interpretHubRpcResult(
-    commandForRpcId(id),
-    statusRaw === "ok" ? "ok" : "error",
-    result,
-  );
+  try {
+    window.history.replaceState(null, "", href);
+    return;
+  } catch {
+    // Keep the parsed callback in sessionStorage even if the hash remains.
+  }
+  try {
+    const next = new URL(href, window.location.origin);
+    window.location.hash = next.hash;
+  } catch {
+    // Hash clearing is best-effort; sessionStorage is the source of truth.
+  }
+}
+
+function locationWithoutHubCallbackHash() {
+  const url = new URL(window.location.href);
+  const fragment = new URLSearchParams(url.hash.substring(1));
   fragment.delete("id");
   fragment.delete("status");
   fragment.delete("result");
-  const url = new URL(window.location.href);
   url.hash = fragment.toString();
-  window.history.replaceState(window.history.state, "", url.href);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export function captureHubRpcCallbackFromWindow(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.sessionStorage.getItem(NIMIQ_HUB_CALLBACK_STORAGE_KEY)) {
+      replaceLocationUrl(locationWithoutHubCallbackHash());
+      return true;
+    }
+    const fragment = new URLSearchParams(window.location.hash.substring(1));
+    const id = fragment.get("id");
+    const status = fragment.get("status");
+    const result = fragment.get("result");
+    if (!id || !status || result == null) return false;
+    const stored: StoredHubRpcCallback = {
+      v: HUB_CALLBACK_STORAGE_VERSION,
+      id,
+      status,
+      result,
+      pathname: window.location.pathname,
+      search: window.location.search,
+    };
+    window.sessionStorage.setItem(NIMIQ_HUB_CALLBACK_STORAGE_KEY, JSON.stringify(stored));
+    replaceLocationUrl(locationWithoutHubCallbackHash());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readStoredHubRpcCallback(): StoredHubRpcCallback | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.sessionStorage.getItem(NIMIQ_HUB_CALLBACK_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const stored = JSON.parse(raw) as StoredHubRpcCallback;
+    if (stored.v !== HUB_CALLBACK_STORAGE_VERSION || !stored.id || !stored.status || stored.result == null) {
+      window.sessionStorage.removeItem(NIMIQ_HUB_CALLBACK_STORAGE_KEY);
+      return null;
+    }
+    return stored;
+  } catch {
+    window.sessionStorage.removeItem(NIMIQ_HUB_CALLBACK_STORAGE_KEY);
+    return null;
+  }
+}
+
+function interpretStoredHubCallback(stored: StoredHubRpcCallback): HubRedirectResult | null {
+  const id = Number.parseInt(stored.id, 10);
+  if (!Number.isFinite(id)) return null;
+  let result: unknown;
+  try {
+    result = parseHubRpcJson(stored.result);
+  } catch {
+    return {
+      type: "error",
+      error: wrapWalletError(
+        "requesting-wallet",
+        new Error("malformed Hub callback"),
+        "restore-address",
+      ),
+      stage: "requesting-wallet",
+      phase: "restore-address",
+    };
+  }
+  const interpreted = interpretHubRpcResult(
+    commandForRpcId(id),
+    stored.status === "ok" ? "ok" : "error",
+    result,
+  );
   return interpreted.type === "empty" ? null : interpreted;
+}
+
+function consumeStoredHubCallback(): HubRedirectResult | null {
+  const stored = readStoredHubRpcCallback();
+  if (!stored) return null;
+  window.sessionStorage.removeItem(NIMIQ_HUB_CALLBACK_STORAGE_KEY);
+  hubCallbackConsumeCount += 1;
+  return interpretStoredHubCallback(stored) ?? { type: "empty" };
+}
+
+export function hubCallbackConsumeCountForTests() {
+  return hubCallbackConsumeCount;
+}
+
+export function peekHubCallbackMeta(): HubCallbackMeta {
+  const stored = readStoredHubRpcCallback();
+  const fragment = typeof window === "undefined" ? null : new URLSearchParams(window.location.hash.substring(1));
+  const hashPresent = Boolean(fragment?.get("id") && fragment.get("status") && fragment.get("result") != null);
+  const idRaw = stored?.id ?? fragment?.get("id");
+  const id = idRaw ? Number.parseInt(idRaw, 10) : Number.NaN;
+  const command = Number.isFinite(id) ? commandForRpcId(id) : null;
+  const statusRaw = stored?.status ?? fragment?.get("status");
+  return {
+    hashPresent,
+    storagePresent: Boolean(stored),
+    operation: callbackOperationFromCommand(command),
+    status: statusRaw === "ok" || statusRaw === "error" ? statusRaw : null,
+    pathname: typeof window !== "undefined" ? window.location.pathname : "",
+  };
+}
+
+function readAndClearHubRedirectHash(): HubRedirectResult | null {
+  if (typeof window === "undefined") return null;
+  captureHubRpcCallbackFromWindow();
+  return consumeStoredHubCallback();
 }
 
 function captureHubRedirectFromLocation() {
@@ -452,52 +600,75 @@ function publicHubReturnUrl() {
 export function hubAuthFailureDiagnostics(
   stage: AuthStage,
   error: unknown,
-  phase: string,
+  phase: AuthPhase,
 ): HubAuthFailureDiagnostics {
   const network = resolveNimiqAuthConfig();
   const original = error instanceof Error ? { name: error.name, message: error.message } : { name: "Unknown", message: String(error) };
+  const meta = peekHubCallbackMeta();
+  const continuation = typeof window !== "undefined" ? readHubAuthContinuation() : null;
+  const cause = error instanceof NimiqAuthError && error.cause instanceof Error
+    ? `${error.cause.name}: ${error.cause.message}`
+    : original.name === "NimiqAuthError"
+      ? original.message
+      : `${original.name}: ${original.message}`;
   return {
-    errorName: original.name,
-    errorMessage: original.message,
-    requestPhase: phase,
-    hubEndpoint: network.ok ? network.hubEndpoint : "unconfigured",
+    phase,
+    name: original.name,
+    message: original.message,
+    cause,
     pathname: typeof window !== "undefined" ? window.location.pathname : "",
-    returnUrl: publicHubReturnUrl(),
+    hashPresent: meta.hashPresent,
+    storagePresent: meta.storagePresent,
+    callbackOperation: meta.operation,
+    hubEndpoint: network.ok ? network.hubEndpoint : "unconfigured",
     network: network.ok ? network.network : "",
     environment: network.ok ? network.environment : "",
-    consensus: network.ok ? network.consensusName : "",
+    returnPath: continuation?.returnPath || publicHubReturnUrl(),
+    ...(typeof window !== "undefined" && readSelectedHubAddress()
+      ? { walletAddress: redactWalletAddress(readSelectedHubAddress() as string) }
+      : {}),
   };
 }
 
-function logHubAuthFailure(stage: AuthStage, error: unknown, phase: string) {
+function logHubAuthFailure(stage: AuthStage, error: unknown, phase: AuthPhase) {
   if (PUBLIC_NODE_ENV === "production") return;
   console.info("[auth] hub failure", hubAuthFailureDiagnostics(stage, error, phase));
 }
 
-function configuredHubLabel() {
-  const network = resolveNimiqAuthConfig();
-  return network.ok ? network.hubLabel : "Nimiq Hub";
-}
-
-function wrapWalletError(stage: AuthStage, error: unknown): NimiqAuthError {
+function wrapWalletError(stage: AuthStage, error: unknown, phase: AuthPhase = phaseFromAuthStage(stage)): NimiqAuthError {
   if (error instanceof NimiqAuthError) return error;
   if (error instanceof AuthApiError) {
     const cancelled = error.status === 401 && isCancellationText(error.message);
     const code = error.code || (error.status === 410 ? "challenge_expired" : error.status === 409 ? "challenge_already_used" : "auth_api_error");
-    return new NimiqAuthError(stage, code, error.message || "Authentication request failed.", cancelled, error);
+    const message = cancelled ? "" : userMessageForAuthPhase(phase, code);
+    return new NimiqAuthError(stage, code, message, cancelled, error, phase);
   }
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
   if (isCancellationText(text)) {
-    return new NimiqAuthError(stage, "wallet_cancelled", "The wallet transaction was cancelled.", true, error);
+    return new NimiqAuthError(stage, "wallet_cancelled", "", true, error, phase);
   }
   if (text.toLowerCase().includes("popup")) {
-    return new NimiqAuthError(stage, "popup_blocked", "The browser blocked the Hub window. Allow popups and try again.", false, error);
+    return new NimiqAuthError(stage, "popup_blocked", userMessageForAuthPhase(phase, "popup_blocked"), false, error, phase);
   }
   if (text.toLowerCase().includes("invalid request")) {
-    return new NimiqAuthError(stage, "hub_invalid_request", `The Nimiq Hub request is invalid. Try the ${configuredHubLabel()} redirect again.`, false, error);
+    return new NimiqAuthError(
+      stage,
+      "hub_invalid_request",
+      "Could not open the Nimiq wallet.",
+      false,
+      error,
+      phase === "sign-challenge" || phase === "restore-signature" ? phase : "choose-address",
+    );
   }
-  logHubAuthFailure(stage, error, stage);
-  return new NimiqAuthError(stage, "wallet_unavailable", "The Nimiq wallet could not be reached.", false, error);
+  const restorePhase = isHistoryStateCloneError(error)
+    ? (phase === "sign-challenge" || phase === "restore-signature" ? "restore-signature" : "restore-address")
+    : phase;
+  if (isHistoryStateCloneError(error)) {
+    logHubAuthFailure(stage, error, restorePhase);
+    return new NimiqAuthError(stage, "hub_restore_failed", userMessageForAuthPhase(restorePhase), false, error, restorePhase);
+  }
+  logHubAuthFailure(stage, error, restorePhase);
+  return new NimiqAuthError(stage, "wallet_unavailable", userMessageForAuthPhase(restorePhase), false, error, restorePhase);
 }
 
 export function selectNimiqAuthTransport(host: { hasNimiqPay: boolean; hasNimiqProvider: boolean; hostLanguage?: string }): NimiqAuthTransport {
@@ -532,7 +703,7 @@ export async function requestMiniAppWallet(initialize: typeof init = init): Prom
     if (result.length === 0) throw new NimiqAuthError("requesting-wallet", "empty_account_list", "Nimiq Pay returned no accounts.");
     return { transport: "mini-app", provider, accounts: result };
   } catch (error) {
-    throw wrapWalletError("requesting-wallet", error);
+    throw wrapWalletError("requesting-wallet", error, "choose-address");
   }
 }
 
@@ -548,14 +719,14 @@ export async function authenticateMiniApp(
   try {
     challenge = await api.createChallenge(canonicalAddress, "mini-app");
   } catch (error) {
-    throw wrapWalletError("requesting-challenge", error);
+    throw wrapWalletError("requesting-challenge", error, "request-challenge");
   }
   console.info("[auth] challenge created");
   let result: SignatureResult | ErrorResponse;
   try {
     result = await wallet.provider.sign(challenge.message);
   } catch (error) {
-    throw wrapWalletError("requesting-signature", error);
+    throw wrapWalletError("requesting-signature", error, "sign-challenge");
   }
   if (isErrorResponse(result)) {
     const text = `${result.error.type} ${result.error.message}`;
@@ -580,6 +751,10 @@ export function persistPendingHubAuthentication(pending: PendingHubAuthenticatio
     hubEndpoint: identity.hubEndpoint,
   };
   window.sessionStorage.setItem(PENDING_HUB_KEY, JSON.stringify(stored));
+  persistHubAuthContinuation({
+    phase: "sign-challenge",
+    addressSelected: true,
+  });
   markHubUiIntent();
 }
 
@@ -611,6 +786,55 @@ export function clearPendingHubAuthentication() {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(PENDING_HUB_KEY);
   clearSelectedHubAddress();
+  clearHubAuthContinuation();
+}
+
+export function persistHubAuthContinuation(patch: Partial<Pick<HubAuthContinuation, "phase" | "addressSelected" | "returnPath">> = {}) {
+  if (typeof window === "undefined") return;
+  const identity = currentHubAuthIdentity();
+  if (!identity) {
+    clearHubAuthContinuation();
+    return;
+  }
+  const existing = readHubAuthContinuation();
+  const next: HubAuthContinuation = {
+    v: HUB_AUTH_CONTINUATION_VERSION,
+    phase: patch.phase ?? existing?.phase ?? "idle",
+    returnPath: patch.returnPath ?? existing?.returnPath ?? currentReturnPath(),
+    addressSelected: patch.addressSelected ?? existing?.addressSelected ?? false,
+    network: identity.network,
+    environment: identity.environment,
+    hubEndpoint: identity.hubEndpoint,
+  };
+  window.sessionStorage.setItem(NIMIQ_HUB_CONTINUATION_KEY, JSON.stringify(next));
+}
+
+export function readHubAuthContinuation(): HubAuthContinuation | null {
+  if (typeof window === "undefined") return null;
+  const stored = window.sessionStorage.getItem(NIMIQ_HUB_CONTINUATION_KEY);
+  if (!stored) return null;
+  try {
+    const continuation = JSON.parse(stored) as HubAuthContinuation;
+    if (
+      continuation.v !== HUB_AUTH_CONTINUATION_VERSION ||
+      typeof continuation.phase !== "string" ||
+      typeof continuation.returnPath !== "string"
+    ) {
+      window.sessionStorage.removeItem(NIMIQ_HUB_CONTINUATION_KEY);
+      return null;
+    }
+    return continuation;
+  } catch {
+    window.sessionStorage.removeItem(NIMIQ_HUB_CONTINUATION_KEY);
+    return null;
+  }
+}
+
+function currentReturnPath() {
+  if (typeof window === "undefined") return "/";
+  const pathname = window.location?.pathname || "/";
+  const search = window.location?.search || "";
+  return `${pathname}${search}`;
 }
 
 export function markHubUiIntent() {
@@ -653,7 +877,7 @@ export async function createHubChallenge(
       console.info("[auth] challenge created");
       return pending;
     } catch (error) {
-      throw wrapWalletError("requesting-challenge", error);
+      throw wrapWalletError("requesting-challenge", error, "request-challenge");
     }
   })();
   challengeInFlight.set(key, pendingPromise);
@@ -675,9 +899,11 @@ export async function beginHubAuthentication(
   }
   console.info(`[auth] transport=hub network=${network.network} hub=${network.hubEndpoint}`);
   markHubUiIntent();
+  persistHubAuthContinuation({ phase: "choose-address", addressSelected: false, returnPath: currentReturnPath() });
   captureHubRedirectFromLocation();
   if (capturedHubRedirect?.type === "address") {
     console.info("[auth] address selected");
+    persistHubAuthContinuation({ phase: "request-challenge", addressSelected: true });
     return createHubChallenge(capturedHubRedirect.address, createChallenge, capturedHubRedirect.label);
   }
   const existing = readPendingHubAuthentication();
@@ -687,10 +913,11 @@ export async function beginHubAuthentication(
   try {
     selected = await client.chooseAddress({ appName: APP_NAME }, behavior);
   } catch (error) {
-    throw wrapWalletError("requesting-wallet", error);
+    throw wrapWalletError("requesting-wallet", error, "choose-address");
   }
   if (!selected?.address) return undefined;
   console.info("[auth] address selected");
+  persistHubAuthContinuation({ phase: "request-challenge", addressSelected: true });
   return createHubChallenge(selected.address, createChallenge, hubAccountLabel(selected));
 }
 
@@ -712,7 +939,7 @@ export async function completeHubAuthentication(
     );
   } catch (error) {
     hubSignRedirectStarted = false;
-    throw wrapWalletError("requesting-signature", error);
+    throw wrapWalletError("requesting-signature", error, "sign-challenge");
   }
   if (!signed) return undefined;
   return finishHubSignature(pending, signed, verifyChallenge);
@@ -761,10 +988,10 @@ export function consumeHubRedirect(client: HubRedirectClient = getHubApi()): Pro
       };
       client.on(HubApi.RequestType.CHOOSE_ADDRESS, (result) => {
         finish({ type: "address", address: result.address, ...(hubAccountLabel(result) ? { label: hubAccountLabel(result) } : {}) });
-      }, (error) => finish({ type: "error", error: wrapWalletError("requesting-wallet", error), stage: "requesting-wallet" }));
+      }, (error) => finish({ type: "error", error: wrapWalletError("requesting-wallet", error, "restore-address"), stage: "requesting-wallet", phase: "restore-address" }));
       client.on(HubApi.RequestType.SIGN_MESSAGE, (result) => {
         finish({ type: "signature", signed: result });
-      }, (error) => finish({ type: "error", error: wrapWalletError("requesting-signature", error), stage: "requesting-signature" }));
+      }, (error) => finish({ type: "error", error: wrapWalletError("requesting-signature", error, "restore-signature"), stage: "requesting-signature", phase: "restore-signature" }));
       client.on(HubApi.RequestType.CHECKOUT, (result) => {
         finish(interpretHubRpcResult(HubApi.RequestType.CHECKOUT, "ok", result));
       }, (error) => finish({ type: "checkout-error", error }));
@@ -772,7 +999,17 @@ export function consumeHubRedirect(client: HubRedirectClient = getHubApi()): Pro
         .then(() => {
           queueMicrotask(() => finish({ type: "empty" }));
         })
-        .catch((error) => finish({ type: "error", error: wrapWalletError("requesting-wallet", error), stage: "requesting-wallet" }));
+        .catch((error) => {
+          const selected = readSelectedHubAddress();
+          if (selected) {
+            finish({ type: "address", address: selected, ...(readSelectedHubAccountLabel() ? { label: readSelectedHubAccountLabel() } : {}) });
+            return;
+          }
+          const pending = readPendingHubAuthentication();
+          const phase: AuthPhase = pending ? "restore-signature" : "restore-address";
+          const stage: AuthStage = pending ? "requesting-signature" : "requesting-wallet";
+          finish({ type: "error", error: wrapWalletError(stage, error, phase), stage, phase });
+        });
     });
   })();
   return redirectWaiter;
@@ -780,6 +1017,127 @@ export function consumeHubRedirect(client: HubRedirectClient = getHubApi()): Pro
 
 export async function takeHubRedirectResult(client?: HubRedirectClient): Promise<HubRedirectResult> {
   return consumeHubRedirect(client ?? getHubApi());
+}
+
+export type HubAuthResumeDeps = {
+  restoreSession?: () => Promise<AuthSession | null>;
+  takeRedirect?: () => Promise<HubRedirectResult>;
+  createChallenge?: typeof createNimiqChallenge;
+  verifyChallenge?: typeof verifyNimiqChallenge;
+  signClient?: HubSignMessageClient;
+  autoStartSignature?: boolean;
+};
+
+async function continueAfterAddress(
+  address: string,
+  label: string | undefined,
+  deps: HubAuthResumeDeps,
+): Promise<HubAuthResumeResult> {
+  persistHubAuthContinuation({ phase: "request-challenge", addressSelected: true });
+  let pending: PendingHubAuthentication;
+  try {
+    pending = await createHubChallenge(address, deps.createChallenge, label);
+  } catch (error) {
+    return { type: "error", error: wrapWalletError("requesting-challenge", error, "request-challenge"), phase: "request-challenge" };
+  }
+  persistHubAuthContinuation({ phase: "sign-challenge", addressSelected: true });
+  if (deps.autoStartSignature === false) {
+    return { type: "awaiting-signature", pending, phase: "sign-challenge" };
+  }
+  try {
+    const session = await completeHubAuthentication(pending, deps.signClient, deps.verifyChallenge);
+    if (session) return { type: "authenticated", session, phase: "restore-session" };
+    return { type: "redirecting", phase: "sign-challenge", pending };
+  } catch (error) {
+    return { type: "error", error: wrapWalletError("requesting-signature", error, "sign-challenge"), phase: "sign-challenge" };
+  }
+}
+
+async function doResumeHubAuthFlow(deps: HubAuthResumeDeps): Promise<HubAuthResumeResult> {
+  prepareNimiqHub();
+  try {
+    const restored = await (deps.restoreSession ?? restoreAuthSession)();
+    if (restored) return { type: "authenticated", session: restored, phase: "restore-session" };
+  } catch (error) {
+    return { type: "error", error: wrapWalletError("restoring-session", error, "restore-session"), phase: "restore-session" };
+  }
+
+  let redirected: HubRedirectResult;
+  try {
+    redirected = await (deps.takeRedirect ?? takeHubRedirectResult)();
+  } catch (error) {
+    const selected = readSelectedHubAddress();
+    const wrappedPhase: AuthPhase = readPendingHubAuthentication() ? "restore-signature" : "restore-address";
+    const wrapped = wrapWalletError(
+      readPendingHubAuthentication() ? "requesting-signature" : "requesting-wallet",
+      error,
+      wrappedPhase,
+    );
+    if (wrapped.cancelled) return { type: "cancelled", phase: wrapped.phase };
+    if (selected && wrappedPhase === "restore-address") {
+      return continueAfterAddress(selected, readSelectedHubAccountLabel(), deps);
+    }
+    return { type: "error", error: wrapped, phase: wrapped.phase };
+  }
+
+  if (isHubPaymentRedirect(redirected)) return { type: "payment", phase: "idle" };
+
+  if (redirected.type === "error") {
+    const error = wrapWalletError(redirected.stage, redirected.error, redirected.phase ?? phaseFromAuthStage(redirected.stage, true));
+    if (error.cancelled) return { type: "cancelled", phase: error.phase };
+    return { type: "error", error, phase: error.phase };
+  }
+
+  if (redirected.type === "address") {
+    return continueAfterAddress(redirected.address, redirected.label, deps);
+  }
+
+  if (redirected.type === "signature") {
+    const pending = readPendingHubAuthentication();
+    if (!pending) {
+      return {
+        type: "error",
+        error: new NimiqAuthError(
+          "verifying-signature",
+          "missing_hub_challenge",
+          userMessageForAuthPhase("restore-signature"),
+          false,
+          undefined,
+          "restore-signature",
+        ),
+        phase: "restore-signature",
+      };
+    }
+    try {
+      const session = await finishHubSignature(pending, redirected.signed, deps.verifyChallenge);
+      return { type: "authenticated", session, phase: "restore-session" };
+    } catch (error) {
+      return { type: "error", error: wrapWalletError("verifying-signature", error, "verify-challenge"), phase: "verify-challenge" };
+    }
+  }
+
+  const pending = readPendingHubAuthentication();
+  const continuation = readHubAuthContinuation();
+  if (pending && continuation?.phase === "sign-challenge" && continuation.addressSelected && deps.autoStartSignature !== false) {
+    try {
+      const session = await completeHubAuthentication(pending, deps.signClient, deps.verifyChallenge);
+      if (session) return { type: "authenticated", session, phase: "restore-session" };
+      return { type: "redirecting", phase: "sign-challenge", pending };
+    } catch (error) {
+      return { type: "error", error: wrapWalletError("requesting-signature", error, "sign-challenge"), phase: "sign-challenge" };
+    }
+  }
+  if (pending) return { type: "awaiting-signature", pending, phase: "sign-challenge" };
+
+  const selected = readSelectedHubAddress();
+  if (selected) return continueAfterAddress(selected, readSelectedHubAccountLabel(), deps);
+
+  return { type: "idle", phase: "idle" };
+}
+
+export function resumeHubAuthFlow(deps: HubAuthResumeDeps = {}): Promise<HubAuthResumeResult> {
+  hubAuthResume ??= doResumeHubAuthFlow(deps);
+  return hubAuthResume;
 }
 
 export function resetHubRedirectConsumption() {
@@ -792,6 +1150,8 @@ export function resetHubRedirectConsumption() {
   hubApi = null;
   hubApiEndpoint = null;
   hubReturnRestoreClaimed = false;
+  hubAuthResume = null;
+  hubCallbackConsumeCount = 0;
 }
 
 export function claimHubReturnRestore() {
@@ -801,7 +1161,8 @@ export function claimHubReturnRestore() {
 }
 
 export function releaseHubReturnRestore() {
-  hubReturnRestoreClaimed = false;
+  // Restore ownership is process-scoped. Releasing on unmount allowed a second
+  // NimiqConnect to consume the same Hub callback. Tests still reset via resetHubRedirectConsumption.
 }
 
 async function submitVerification(
@@ -822,7 +1183,7 @@ async function submitVerification(
     console.info("[auth] verification succeeded");
     return session;
   } catch (error) {
-    throw wrapWalletError("verifying-signature", error);
+    throw wrapWalletError("verifying-signature", error, "verify-challenge");
   }
 }
 

@@ -101,12 +101,16 @@ test("wallet authentication opens in an accessible application modal", () => {
     new URL("../components/auth/nimiq-connect.tsx", import.meta.url),
     "utf8",
   );
+  const dialog = fs.readFileSync(
+    new URL("../components/auth/nimiq-connect-dialog.tsx", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(connect, /createPortal/);
-  assert.match(connect, /role="dialog"/);
-  assert.match(connect, /aria-modal="true"/);
   assert.match(connect, /aria-haspopup="dialog"/);
-  assert.match(connect, /event\.key === "Escape"/);
+  assert.match(dialog, /createPortal/);
+  assert.match(dialog, /role="dialog"/);
+  assert.match(dialog, /aria-modal="true"/);
+  assert.match(dialog, /event\.key === "Escape"/);
 });
 
 test("event creation exposes only persisted backend fields", () => {

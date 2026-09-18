@@ -622,16 +622,17 @@ test("unknown Hub failures keep a safe UI message and structured diagnostics", a
       (error) => {
         if (!(error instanceof NimiqAuthError)) return false;
         assert.equal(error.code, "wallet_unavailable");
-        assert.equal(error.message, "The Nimiq wallet could not be reached.");
+        assert.equal(error.phase, "choose-address");
+        assert.equal(error.message, "Could not open the Nimiq wallet.");
         assert.equal(error.cause, original);
-        const diagnostics = hubAuthFailureDiagnostics(error.stage, original, "requesting-wallet");
-        assert.equal(diagnostics.errorName, "Error");
-        assert.equal(diagnostics.errorMessage, "ECONNREFUSED hub.nimiq.com");
-        assert.equal(diagnostics.requestPhase, "requesting-wallet");
+        const diagnostics = hubAuthFailureDiagnostics(error.stage, original, "choose-address");
+        assert.equal(diagnostics.name, "Error");
+        assert.equal(diagnostics.message, "ECONNREFUSED hub.nimiq.com");
+        assert.equal(diagnostics.phase, "choose-address");
         assert.equal(diagnostics.hubEndpoint, "https://hub.nimiq-testnet.com");
         assert.equal(diagnostics.pathname, "/");
-        assert.equal(diagnostics.returnUrl, "https://nim-near.vercel.app/");
-        assert.equal(diagnostics.returnUrl.includes("token="), false);
+        assert.equal(diagnostics.returnPath.includes("token="), false);
+        assert.equal(diagnostics.hashPresent, false);
         return true;
       },
     );
