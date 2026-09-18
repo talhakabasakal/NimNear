@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	iamRepo "github.com/masterfabric-go/masterfabric/internal/domain/iam/repository"
 	"github.com/masterfabric-go/masterfabric/internal/domain/iam/service"
+	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 	"github.com/masterfabric-go/masterfabric/internal/shared/logger"
 	"github.com/masterfabric-go/masterfabric/internal/shared/response"
 )
@@ -22,22 +24,31 @@ const (
 )
 
 // JWTAuth is middleware that validates JWT tokens and injects claims into context.
-func JWTAuth(authService service.AuthService) func(http.Handler) http.Handler {
+func JWTAuth(authService service.AuthService, cookieNames ...string) func(http.Handler) http.Handler {
+	cookieName := "nimnear_session"
+	if len(cookieNames) > 0 && strings.TrimSpace(cookieNames[0]) != "" {
+		cookieName = cookieNames[0]
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
+			token := ""
+			if authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+					response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
+					return
+				}
+				token = parts[1]
+			} else if cookie, err := r.Cookie(cookieName); err == nil {
+				token = cookie.Value
+			}
+			if token == "" {
+				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authentication session"})
 				return
 			}
 
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
-				return
-			}
-
-			claims, err := authService.ValidateToken(r.Context(), parts[1])
+			claims, err := authService.ValidateToken(r.Context(), token)
 			if err != nil {
 				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 				return
@@ -58,6 +69,33 @@ func JWTAuth(authService service.AuthService) func(http.Handler) http.Handler {
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// RequireActiveAccount rejects JWTs whose subject is missing, inactive, or deleted.
+func RequireActiveAccount(users iamRepo.UserRepository) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if users == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			userID, ok := UserIDFromContext(r.Context())
+			if !ok || userID == uuid.Nil {
+				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "user not authenticated"})
+				return
+			}
+			user, err := users.GetByID(r.Context(), userID)
+			if err != nil {
+				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+				return
+			}
+			if user == nil || !user.IsActive() {
+				response.Error(w, domainErr.NewWithCode(domainErr.ErrUnauthorized, "account_unavailable", "account is not active", nil))
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

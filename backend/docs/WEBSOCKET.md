@@ -21,25 +21,22 @@ Real-time event delivery for multi-tenant clients over a dedicated WebSocket end
 2. **Clean architecture** — Domain defines interfaces; application validates connections; infrastructure implements the hub and upgrade logic.
 3. **Multi-tenant isolation** — Every room is keyed by `org_id` + `app_id`. Clients cannot subscribe to rooms outside their validated scope.
 4. **Event bus integration** — Reuses the existing `EventBus.Subscribe` pattern; no new transport required for phase 1.
-5. **Browser-friendly auth** — JWT accepted via `?token=` query parameter (WebSocket cannot set custom headers in browsers) or `Authorization: Bearer` header.
+5. **Browser-friendly auth** — Browser clients authenticate with the HttpOnly session cookie on the WebSocket handshake. Non-browser clients may send `Authorization: Bearer`. Query-string JWTs are rejected.
 
 ## Endpoint
 
 ```
-GET /api/v1/ws?token=<jwt>
+GET /api/v1/ws
 ```
-
-**Required headers:**
-
-| Header | Description |
-| ------ | ----------- |
-| `X-Organization-ID` | Organization UUID (must match app ownership) |
-| `X-App-ID` | Application UUID |
 
 **Auth resolution order:**
 
-1. Query parameter `token`
-2. `Authorization: Bearer <jwt>`
+1. Router `JWTAuth` context (session cookie or `Authorization: Bearer`)
+2. Handler fallback: `Authorization: Bearer`, then the session cookie
+
+Query parameter `token` is ignored.
+
+**Origin:** In production, browser WebSocket connections must send `Origin` matching `CORS_ALLOWED_ORIGINS`. Empty Origin is rejected unless `WS_ALLOW_EMPTY_ORIGIN=true` (development/non-browser).
 
 **RBAC:** requires `app:read` permission (connecting to an app's event stream).
 
@@ -119,7 +116,7 @@ Channel names must match `^[a-zA-Z0-9_-]{1,64}$`.
 | `WS_MAX_CONNECTIONS` | `1000` | Per-process connection cap |
 | `WS_PING_INTERVAL_SECONDS` | `30` | Server ping interval |
 | `WS_READ_BUFFER_SIZE` | `1024` | WebSocket read buffer (bytes) |
-| `WS_WRITE_BUFFER_SIZE` | `1024` | WebSocket write buffer (bytes) |
+| `WS_ALLOW_EMPTY_ORIGIN` | `true` in development, `false` in production | Allow WebSocket handshakes with no Origin header |
 
 ## Phase 2 (not in this branch)
 

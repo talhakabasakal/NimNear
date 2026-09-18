@@ -30,17 +30,21 @@ type Event struct {
 	Currency      string      `json:"currency"`
 	Capacity      *int        `json:"capacity,omitempty"`
 	AttendeeCount int         `json:"attendee_count"`
-	ImageURL      string      `json:"image_url"`
-	CalendarID    *uuid.UUID  `json:"calendar_id,omitempty"`
-	PlaceID       *uuid.UUID  `json:"place_id,omitempty"`
-	Latitude      *float64    `json:"latitude,omitempty"`
-	Longitude     *float64    `json:"longitude,omitempty"`
-	Address       *string     `json:"address,omitempty"`
-	City          string      `json:"city"`
-	OrganizerID   *uuid.UUID  `json:"organizer_id,omitempty"`
-	IsPublic      bool        `json:"is_public"`
-	CreatedAt     time.Time   `json:"created_at"`
-	UpdatedAt     time.Time   `json:"updated_at"`
+	// SoldOut is the authoritative capacity view, including active paid holds.
+	// It is populated by read repositories; IsSoldOut retains a safe fallback
+	// for in-memory events and older callers.
+	SoldOut     bool       `json:"-"`
+	ImageURL    string     `json:"image_url"`
+	CalendarID  *uuid.UUID `json:"calendar_id,omitempty"`
+	PlaceID     *uuid.UUID `json:"place_id,omitempty"`
+	Latitude    *float64   `json:"latitude,omitempty"`
+	Longitude   *float64   `json:"longitude,omitempty"`
+	Address     *string    `json:"address,omitempty"`
+	City        string     `json:"city"`
+	OrganizerID *uuid.UUID `json:"organizer_id,omitempty"`
+	IsPublic    bool       `json:"is_public"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // IsFree reports whether the exact stored price is zero.
@@ -50,7 +54,29 @@ func (e Event) IsFree() bool {
 
 // IsSoldOut reports whether a capacity is configured and has been reached.
 func (e Event) IsSoldOut() bool {
+	if e.SoldOut {
+		return true
+	}
 	return e.Capacity != nil && e.AttendeeCount >= *e.Capacity
+}
+
+// Patch contains the organizer-editable event fields. Set flags preserve the
+// difference between an omitted PATCH field and an explicit null value.
+type Patch struct {
+	Title          string
+	TitleSet       bool
+	Description    string
+	DescriptionSet bool
+	StartsAt       time.Time
+	StartsAtSet    bool
+	EndsAt         time.Time
+	EndsAtSet      bool
+	ImageURL       string
+	ImageURLSet    bool
+	Capacity       *int
+	CapacitySet    bool
+	PlaceID        *uuid.UUID
+	PlaceIDSet     bool
 }
 
 // IsPast reports whether the event has ended at the supplied time.

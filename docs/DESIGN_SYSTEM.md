@@ -4,7 +4,7 @@
 
 The NIMNear visual design is defined in the connected Figma Make file.
 
-Figma Make is the visual source of truth. The values below are limited to the confirmed dark-theme values and runtime observations from the inspected preview. Values marked as runtime-observed are not confirmed as native Figma Variables.
+Figma Make is the visual source of truth. The confirmed dark-theme values remain the visual baseline. The light-theme values are semantic runtime counterparts added for the product theme switch and are not confirmed as native Figma Variables.
 
 ## Figma Workflow
 
@@ -66,6 +66,25 @@ The following dark-theme values were confirmed in the Figma Make preview. They s
 | avatar | `#5b5af7` |
 
 Do not expand this into an invented token scale. Additional semantic colors are not confirmed here.
+
+### Light Theme
+
+The runtime light theme preserves the same semantic roles and switches them through `data-theme="light"` on the root element:
+
+| Role | Value |
+| --- | --- |
+| background | `#f8f7fb` |
+| card | `#ffffff` |
+| card-hover | `#f0eef6` |
+| border | `#dedbe8` |
+| faint-border | `#c7c2d4` |
+| muted-text | `#666272` |
+| text | `#17151f` |
+| accent | `#7445a4` |
+| primary | `#675be7` |
+| focus-ring | `#675be7` |
+
+The user's explicit choice is stored in `localStorage`. Without a stored choice, the first render follows `prefers-color-scheme`.
 
 ### Typography
 

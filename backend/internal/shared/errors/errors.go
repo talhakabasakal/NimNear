@@ -17,6 +17,7 @@ var (
 	ErrBadRequest     = errors.New("bad request")
 	ErrConflict       = errors.New("conflict")
 	ErrRateLimited    = errors.New("rate limited")
+	ErrGone           = errors.New("gone")
 	ErrNotImplemented = errors.New("not implemented")
 	ErrEventPast      = errors.New("event is past")
 	ErrPaidEvent      = errors.New("event is paid")
@@ -91,6 +92,8 @@ func HTTPStatusCode(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, ErrRateLimited):
 		return http.StatusTooManyRequests
+	case errors.Is(err, ErrGone):
+		return http.StatusGone
 	case errors.Is(err, ErrNotImplemented):
 		return http.StatusNotImplemented
 	case errors.Is(err, ErrPaidEvent):

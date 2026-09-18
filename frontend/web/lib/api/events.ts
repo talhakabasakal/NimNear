@@ -1,3 +1,10 @@
+import {
+  nimToLunas as parseNimToLunas,
+  normalizeNimPrice as canonicalizeNimPrice,
+} from "../nimiq/amount";
+import { userFacingApiMessage } from "./http-error";
+import { withAuthSession } from "./session-request";
+
 export type EventRecord = {
   id: string;
   title: string;
@@ -33,37 +40,23 @@ type EventResponse = {
 };
 
 export class EventsApiError extends Error {
-  constructor(public readonly status: number, message = "Events API returned " + status) {
+  constructor(
+    public readonly status: number,
+    message = "Events API returned " + status,
+  ) {
     super(message);
     this.name = "EventsApiError";
   }
 }
 
-const LUNAS_PER_NIM = BigInt("100000");
-const MAX_INT64 = BigInt("9223372036854775807");
-
 /** Converts a decimal NIM string to exact Luna without using floating point. */
 export function nimToLunas(value: string): bigint | null {
-  const normalized = value.trim();
-  if (!normalized || !/^[0-9]+(?:\.[0-9]+)?$/.test(normalized)) return null;
-
-  const [integerPart, fractionPart = ""] = normalized.split(".");
-  if (fractionPart.length > 5) return null;
-
-  const fraction = BigInt((fractionPart + "00000").slice(0, 5));
-  const lunas = BigInt(integerPart) * LUNAS_PER_NIM + fraction;
-  return lunas <= MAX_INT64 ? lunas : null;
+  return parseNimToLunas(value);
 }
 
 /** Returns the canonical exact decimal string accepted by POST /events. */
 export function normalizeNimPrice(value: string): string | null {
-  const lunas = nimToLunas(value);
-  if (lunas === null) return null;
-  if (lunas === BigInt("0")) return "0";
-
-  const integer = lunas / LUNAS_PER_NIM;
-  const fraction = (lunas % LUNAS_PER_NIM).toString().padStart(5, "0").replace(/0+$/, "");
-  return fraction ? `${integer}.${fraction}` : integer.toString();
+  return canonicalizeNimPrice(value);
 }
 
 export function formatNimPrice(price: string) {
@@ -78,14 +71,33 @@ export type EventQuery = {
   limit?: number;
 };
 
-export const apiBaseUrl = process.env.NEXT_PUBLIC_NIMNEAR_API_URL ?? process.env.NIMNEAR_API_URL ?? "http://localhost:8080";
+const configuredBrowserApiUrl = process.env.NEXT_PUBLIC_NIMNEAR_API_URL?.trim();
+export const apiBaseUrl =
+  configuredBrowserApiUrl ||
+  (process.env.NODE_ENV === "production"
+    ? ""
+    : (typeof window !== "undefined"
+        ? `${window.location.protocol}//${window.location.hostname}:8080`
+        : process.env.NIMNEAR_API_URL) || "http://localhost:8080");
 
 async function throwEventsApiError(response: Response): Promise<never> {
-  const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
-  throw new EventsApiError(response.status, payload?.message ?? payload?.error ?? "Events API returned " + response.status);
+  const payload = (await response.json().catch(() => null)) as {
+    message?: string;
+    error?: string;
+  } | null;
+  throw new EventsApiError(
+    response.status,
+    userFacingApiMessage(
+      response.status,
+      payload?.message ?? payload?.error,
+      "Events could not be loaded.",
+    ),
+  );
 }
 
-export async function fetchEvents(query: EventQuery = {}): Promise<EventRecord[]> {
+export async function fetchEvents(
+  query: EventQuery = {},
+): Promise<EventRecord[]> {
   const url = new URL("/api/v1/events", apiBaseUrl);
 
   if (query.city) url.searchParams.set("city", query.city);
@@ -101,7 +113,6 @@ export async function fetchEvents(query: EventQuery = {}): Promise<EventRecord[]
   return payload.data;
 }
 
-
 export async function fetchEvent(id: string): Promise<EventRecord> {
   const url = new URL(`/api/v1/events/${encodeURIComponent(id)}`, apiBaseUrl);
   const response = await fetch(url, { cache: "no-store" });
@@ -111,7 +122,6 @@ export async function fetchEvent(id: string): Promise<EventRecord> {
   const payload = (await response.json()) as EventResponse;
   return payload.data;
 }
-
 
 export type CreateEventInput = {
   title: string;
@@ -130,15 +140,59 @@ export type CreateEventInput = {
   city: string;
 };
 
-export async function createEvent(input: CreateEventInput, token: string): Promise<EventRecord> {
-  const response = await fetch(new URL("/api/v1/events", apiBaseUrl), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(input),
-  });
+export type UpdateEventInput = {
+  title?: string;
+  description?: string;
+  starts_at?: string;
+  ends_at?: string;
+  image_url?: string;
+  capacity?: number | null;
+  place_id?: string | null;
+};
+
+export async function updateEvent(
+  id: string,
+  input: UpdateEventInput,
+  token?: string,
+): Promise<EventRecord> {
+  const response = await fetch(
+    new URL("/api/v1/events/" + encodeURIComponent(id), apiBaseUrl),
+    withAuthSession(token, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+  if (!response.ok) await throwEventsApiError(response);
+  return ((await response.json()) as EventResponse).data;
+}
+
+export async function cancelEvent(
+  id: string,
+  token?: string,
+): Promise<EventRecord> {
+  const response = await fetch(
+    new URL("/api/v1/events/" + encodeURIComponent(id) + "/cancel", apiBaseUrl),
+    withAuthSession(token, { method: "POST" }),
+  );
+  if (!response.ok) await throwEventsApiError(response);
+  return ((await response.json()) as EventResponse).data;
+}
+
+export async function createEvent(
+  input: CreateEventInput,
+  token?: string,
+): Promise<EventRecord> {
+  const response = await fetch(
+    new URL("/api/v1/events", apiBaseUrl),
+    withAuthSession(token, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    }),
+  );
 
   if (!response.ok) await throwEventsApiError(response);
 

@@ -4,24 +4,25 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: masterfabric-postgres
+    container_name: nimnear-postgres
     environment:
-      POSTGRES_USER: masterfabric
-      POSTGRES_PASSWORD: masterfabric
-      POSTGRES_DB: masterfabric
+      POSTGRES_USER: nimnear
+      POSTGRES_PASSWORD: nimnear
+      POSTGRES_DB: nimnear
     ports:
       - "${DB_HOST_BIND:-127.0.0.1}:${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U masterfabric"]
+      test: ["CMD-SHELL", "pg_isready -U nimnear"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: masterfabric-redis
+    container_name: nimnear-redis
     ports:
       - "${REDIS_HOST_BIND:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -34,7 +35,7 @@ services:
 
   kafka:
     image: apache/kafka:latest
-    container_name: masterfabric-kafka
+    container_name: nimnear-kafka
     ports:
       - "${KAFKA_HOST_BIND:-127.0.0.1}:${KAFKA_PORT:-9092}:9092"
     environment:
@@ -52,7 +53,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
-      CLUSTER_ID: "MasterfabricKafkaClusterId1"
+      CLUSTER_ID: "NimnearKafkaClusterId1"
     volumes:
       - kafkadata:/var/lib/kafka/data
     healthcheck:
@@ -64,11 +65,11 @@ services:
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    container_name: masterfabric-kafka-ui
+    container_name: nimnear-kafka-ui
     ports:
       - "${KAFKA_UI_HOST_BIND:-127.0.0.1}:8090:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: masterfabric
+      KAFKA_CLUSTERS_0_NAME: nimnear
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
     depends_on:
       kafka:

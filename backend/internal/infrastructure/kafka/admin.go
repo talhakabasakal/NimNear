@@ -19,6 +19,7 @@ func DefaultTopics() []string {
 		events.TopicTenant,
 		events.TopicAPIManagement,
 		events.TopicAudit,
+		events.TopicPayments,
 	}
 }
 

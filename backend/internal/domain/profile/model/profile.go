@@ -13,6 +13,7 @@ type PublicProfile struct {
 	Username            *string
 	Bio                 string
 	AvatarURL           string
+	WalletAddress       string
 	JoinedAt            time.Time
 	OrganizedEventCount int
 	AttendedEventCount  int

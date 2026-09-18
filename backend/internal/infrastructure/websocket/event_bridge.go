@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	apimgmtEvent "github.com/masterfabric-go/masterfabric/internal/domain/apimanagement/event"
 	iamEvent "github.com/masterfabric-go/masterfabric/internal/domain/iam/event"
+	realtimeevent "github.com/masterfabric-go/masterfabric/internal/domain/realtime/event"
 	"github.com/masterfabric-go/masterfabric/internal/domain/realtime/model"
 	tenantEvent "github.com/masterfabric-go/masterfabric/internal/domain/tenant/event"
 	"github.com/masterfabric-go/masterfabric/internal/domain/tenant/repository"
@@ -16,9 +17,11 @@ import (
 
 // EventBridge fans out domain events from the event bus to WebSocket rooms.
 type EventBridge struct {
-	hub     *Hub
-	appRepo repository.AppRepository
-	logger  *slog.Logger
+	hub        *Hub
+	appRepo    repository.AppRepository
+	relay      Relay
+	instanceID string
+	logger     *slog.Logger
 }
 
 // NewEventBridge creates a new EventBridge.
@@ -26,11 +29,21 @@ func NewEventBridge(hub *Hub, appRepo repository.AppRepository, logger *slog.Log
 	return &EventBridge{hub: hub, appRepo: appRepo, logger: logger}
 }
 
+// SetRelay attaches optional cross-instance fan-out. Redis-less development stays local-only.
+func (b *EventBridge) SetRelay(relay Relay, instanceID string) {
+	if b == nil {
+		return
+	}
+	b.relay = relay
+	b.instanceID = instanceID
+}
+
 // Register subscribes the bridge to all platform event topics.
 func (b *EventBridge) Register(bus events.EventBus) {
 	bus.Subscribe(events.TopicIAM, b.handleEvent(events.TopicIAM, "iam"))
 	bus.Subscribe(events.TopicTenant, b.handleEvent(events.TopicTenant, "tenant"))
 	bus.Subscribe(events.TopicAPIManagement, b.handleEvent(events.TopicAPIManagement, "api-management"))
+	bus.Subscribe(events.TopicPayments, b.handlePaymentEvent)
 }
 
 func (b *EventBridge) handleEvent(topic, channel string) events.Handler {
@@ -162,5 +175,112 @@ func extractRoutes(event events.Event) []eventRoute {
 		}}
 	default:
 		return nil
+	}
+}
+
+func (b *EventBridge) handlePaymentEvent(ctx context.Context, event events.Event) error {
+	changed, ok := asStatusChanged(event)
+	if !ok || !realtimeevent.IsPaymentDomainType(changed.Type) {
+		return nil
+	}
+	observePublished(changed.Type)
+	msg, err := model.NewUserEventMessage(changed.Type, events.TopicPayments, model.ClientEventData{
+		ResourceID: changed.ResourceID,
+		Status:     changed.Status,
+	})
+	if err != nil {
+		if b.logger != nil {
+			b.logger.Error("failed to marshal payment realtime payload", "error", err, "type", changed.Type)
+		}
+		return nil
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	b.DeliverToUsers(changed.UserIDs, payload, changed.Type)
+	if b.relay != nil {
+		if err := b.relay.Publish(ctx, changed.UserIDs, payload); err != nil && b.logger != nil {
+			b.logger.Error("realtime fanout publish failed", "error", err, "type", changed.Type, "resource_id", changed.ResourceID)
+		}
+	}
+	if b.logger != nil {
+		b.logger.Info("domain_event_delivered", "type", changed.Type, "resource_id", changed.ResourceID, "status", changed.Status)
+	}
+	return nil
+}
+
+// DeliverToUsers pushes a client payload to local user rooms. It does not re-publish to Redis.
+func (b *EventBridge) DeliverToUsers(userIDs []uuid.UUID, payload []byte, eventType string) {
+	if b == nil || b.hub == nil {
+		return
+	}
+	delivered := false
+	for _, userID := range realtimeevent.UniqueUserIDs(userIDs...) {
+		room, err := model.BuildUserRoomKey(userID, model.PaymentsChannel)
+		if err != nil {
+			continue
+		}
+		b.hub.Broadcast(room, payload)
+		delivered = true
+	}
+	if delivered {
+		observeDelivered(eventType)
+	}
+}
+
+// DeliverFanout applies a remote instance payload to local clients only.
+func (b *EventBridge) DeliverFanout(msg FanoutMessage) {
+	if b == nil || msg.OriginInstance == b.instanceID {
+		return
+	}
+	userIDs := make([]uuid.UUID, 0, len(msg.UserIDs))
+	for _, raw := range msg.UserIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			continue
+		}
+		userIDs = append(userIDs, id)
+	}
+	eventType := "unknown"
+	var outbound model.OutboundMessage
+	if err := json.Unmarshal(msg.Payload, &outbound); err == nil && outbound.Type != "" {
+		eventType = outbound.Type
+	}
+	b.DeliverToUsers(userIDs, msg.Payload, eventType)
+}
+
+func asStatusChanged(event events.Event) (realtimeevent.StatusChanged, bool) {
+	switch e := event.(type) {
+	case realtimeevent.StatusChanged:
+		return e, true
+	case *realtimeevent.StatusChanged:
+		if e == nil {
+			return realtimeevent.StatusChanged{}, false
+		}
+		return *e, true
+	case *events.Envelope:
+		if e == nil {
+			return realtimeevent.StatusChanged{}, false
+		}
+		var changed realtimeevent.StatusChanged
+		if err := json.Unmarshal(e.Data, &changed); err != nil {
+			return realtimeevent.StatusChanged{}, false
+		}
+		if changed.Type == "" {
+			changed.Type = e.Type
+		}
+		return changed, true
+	case events.Envelope:
+		var changed realtimeevent.StatusChanged
+		if err := json.Unmarshal(e.Data, &changed); err != nil {
+			return realtimeevent.StatusChanged{}, false
+		}
+		if changed.Type == "" {
+			changed.Type = e.Type
+		}
+		return changed, true
+	default:
+		return realtimeevent.StatusChanged{}, false
 	}
 }

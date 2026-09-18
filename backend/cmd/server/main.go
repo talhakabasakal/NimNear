@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -22,10 +24,12 @@ import (
 	participationHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventparticipation"
 	eventpurchaseHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventpurchase"
 	iamHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/iam"
+	paymentrequestHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/paymentrequest"
 	placeHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/place"
 	profileHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/profile"
 	realtimeHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/realtime"
 	tenantHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/tenant"
+	walletHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/wallet"
 	"github.com/masterfabric-go/masterfabric/internal/infrastructure/http/router"
 	infraKafka "github.com/masterfabric-go/masterfabric/internal/infrastructure/kafka"
 	nimiqRPC "github.com/masterfabric-go/masterfabric/internal/infrastructure/nimiq/rpc"
@@ -36,6 +40,7 @@ import (
 	pgParticipation "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/eventparticipation"
 	pgEventPurchase "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/eventpurchase"
 	pgIam "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/iam"
+	pgPaymentRequest "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/paymentrequest"
 	pgPlace "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/place"
 	pgProfile "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/profile"
 	pgTenant "github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/tenant"
@@ -48,10 +53,12 @@ import (
 	participationUC "github.com/masterfabric-go/masterfabric/internal/application/eventparticipation/usecase"
 	purchaseUC "github.com/masterfabric-go/masterfabric/internal/application/eventpurchase/usecase"
 	iamUC "github.com/masterfabric-go/masterfabric/internal/application/iam/usecase"
+	paymentRequestUC "github.com/masterfabric-go/masterfabric/internal/application/paymentrequest/usecase"
 	placeUC "github.com/masterfabric-go/masterfabric/internal/application/place/usecase"
 	profileUC "github.com/masterfabric-go/masterfabric/internal/application/profile/usecase"
 	realtimeUC "github.com/masterfabric-go/masterfabric/internal/application/realtime/usecase"
 	tenantUC "github.com/masterfabric-go/masterfabric/internal/application/tenant/usecase"
+	walletUC "github.com/masterfabric-go/masterfabric/internal/application/wallet/usecase"
 
 	// Gateway
 	"github.com/masterfabric-go/masterfabric/internal/gateway"
@@ -63,6 +70,7 @@ import (
 	"github.com/masterfabric-go/masterfabric/internal/shared/database"
 	"github.com/masterfabric-go/masterfabric/internal/shared/events"
 	"github.com/masterfabric-go/masterfabric/internal/shared/logger"
+	"github.com/masterfabric-go/masterfabric/internal/shared/ratelimit"
 	"github.com/masterfabric-go/masterfabric/internal/shared/telemetry"
 	"github.com/masterfabric-go/masterfabric/internal/shared/version"
 )
@@ -88,6 +96,8 @@ func run() error {
 	log.Info("starting NIMNear API",
 		"host", cfg.Server.Host,
 		"port", cfg.Server.Port,
+		"email_auth_enabled", cfg.EmailAuth.Enabled,
+		"platform_api_enabled", cfg.Platform.APIEnabled,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -102,7 +112,7 @@ func run() error {
 		log.Info("opentelemetry initialized")
 	}
 
-	// Initialize PostgreSQL
+	// Initialize PostgreSQL connection pool
 	db, err := database.NewPostgresPool(ctx, cfg.Database)
 	if err != nil {
 		if cfg.IsProduction() {
@@ -118,7 +128,10 @@ func run() error {
 	// Initialize Redis
 	redisClient, err := cache.NewRedisClient(ctx, cfg.Redis)
 	if err != nil {
-		log.Warn("redis unavailable, running without cache", "error", err)
+		if cfg.IsProduction() {
+			return fmt.Errorf("redis unavailable in production")
+		}
+		log.Warn("redis unavailable, running without cache")
 		redisClient = nil
 	} else {
 		defer redisClient.Close()
@@ -230,6 +243,15 @@ func buildDependencies(
 		Redis:              redisClient,
 		CORSAllowedOrigins: cfg.Server.CORSAllowedOrigins,
 		MaxBodyBytes:       cfg.Server.MaxBodyBytes,
+		SessionCookieName:  cfg.NimiqAuth.CookieName,
+		PaymentsEnabled:    cfg.Payments.Enabled(),
+		EmailAuthEnabled:   cfg.EmailAuth.Enabled,
+		PlatformAPIEnabled: cfg.Platform.APIEnabled,
+		MetricsEnabled:     cfg.Metrics.Enabled,
+		MetricsPublic:      cfg.Metrics.Public,
+	}
+	if proxies, err := cfg.Server.TrustedProxies(); err == nil {
+		deps.TrustedProxies = proxies
 	}
 
 	if db == nil {
@@ -239,6 +261,7 @@ func buildDependencies(
 
 	// --- Repositories ---
 	userRepo := pgIam.NewUserRepo(db)
+	nimiqAuthRepo := pgIam.NewNimiqAuthRepo(db)
 	roleRepo := pgIam.NewRoleRepo(db)
 	orgRepo := pgTenant.NewOrgRepo(db)
 	workspaceRepo := pgTenant.NewWorkspaceRepository(db)
@@ -252,19 +275,24 @@ func buildDependencies(
 	eventRepo := pgEvent.NewEventRepo(db)
 	participationRepo := pgParticipation.NewParticipationRepo(db)
 	purchaseRepo := pgEventPurchase.NewPurchaseRepo(db)
+	paymentRequestRepo := pgPaymentRequest.NewRequestRepo(db)
 
 	// --- Services ---
 	jwtService := infraAuth.NewJWTService(cfg.JWT)
 	rbacService := infraAuth.NewRBACService(roleRepo, redisClient)
 
 	deps.AuthService = jwtService
-	deps.RBACService = rbacService
-	deps.OrgRepo = orgRepo
-	deps.WorkspaceRepo = workspaceRepo
+	deps.UserRepo = userRepo
+	if cfg.Platform.APIEnabled {
+		deps.RBACService = rbacService
+		deps.OrgRepo = orgRepo
+		deps.WorkspaceRepo = workspaceRepo
+	}
 
 	// --- Use cases (with event bus for domain event publishing) ---
 	registerUC := iamUC.NewRegisterUseCase(userRepo, jwtService, eventBus)
 	loginUC := iamUC.NewLoginUseCase(userRepo, jwtService)
+	nimiqAuthUC := iamUC.NewNimiqAuthUseCase(nimiqAuthRepo, jwtService, cfg.NimiqAuth)
 	assignRoleUC := iamUC.NewAssignRoleUseCase(roleRepo, rbacService, eventBus)
 	createOrgUC := tenantUC.NewCreateOrgUseCase(orgRepo, eventBus)
 	createWorkspaceUC := tenantUC.NewCreateWorkspaceUseCase(workspaceRepo, orgRepo, eventBus)
@@ -279,24 +307,60 @@ func buildDependencies(
 	eventUseCase := eventUC.NewEventUseCaseWithAssociations(eventRepo, placeRepo, calendarRepo)
 	participationUseCase := participationUC.NewParticipationUseCase(participationRepo)
 	purchaseUseCase := purchaseUC.NewPurchaseUseCase(purchaseRepo, cfg.Payments.HoldDuration)
+	paymentRequestNetwork := strings.TrimSpace(cfg.Payments.NimiqNetwork)
+	if paymentRequestNetwork == "" {
+		paymentRequestNetwork = cfg.NimiqAuth.Network
+	}
+	paymentRequestUseCase := paymentRequestUC.NewRequestUseCase(
+		paymentRequestRepo,
+		nimiqAuthRepo,
+		cfg.Payments.RequestTTL,
+		paymentRequestNetwork,
+		log,
+	).WithEventBus(eventBus)
+	var nimiqClient *nimiqRPC.Client
 	if cfg.Payments.Enabled() {
-		nimiqClient := nimiqRPC.NewClient(cfg.Payments.NimiqRPCURL)
-		nimiqVerifier := nimiqRPC.NewVerifier(nimiqClient, cfg.Payments.MerchantAddress, cfg.Payments.NimiqNetwork)
+		nimiqClient = nimiqRPC.NewClient(cfg.Payments.NimiqRPCURL)
+		deps.NimiqRPCHealth = nimiqRPC.NewHealth(nimiqClient)
+		nimiqVerifier := nimiqRPC.NewVerifier(nimiqClient, cfg.Payments.MerchantAddress, cfg.Payments.NimiqNetwork, nimiqAuthRepo)
+		reconciliationPolicy := purchaseUC.ReconciliationPolicy{
+			Interval:  cfg.Payments.ReconciliationInterval,
+			Deadline:  cfg.Payments.ReconciliationDeadline,
+			BatchSize: cfg.Payments.ReconciliationBatchSize,
+		}
 		purchaseUseCase = purchaseUC.NewPurchaseUseCaseWithVerifierAndPolicy(
 			purchaseRepo,
 			cfg.Payments.HoldDuration,
 			nimiqVerifier,
 			cfg.Payments.MerchantAddress,
 			cfg.Payments.NimiqNetwork,
-			purchaseUC.ReconciliationPolicy{
+			reconciliationPolicy,
+		).WithIdentities(nimiqAuthRepo)
+		purchaseWorker := purchaseUC.NewReconciliationWorker(purchaseUseCase, log)
+		go purchaseWorker.Run(reconciliationCtx)
+		paymentRequestUseCase = paymentRequestUC.NewRequestUseCaseWithVerifierAndPolicy(
+			paymentRequestRepo,
+			nimiqAuthRepo,
+			cfg.Payments.RequestTTL,
+			cfg.Payments.NimiqNetwork,
+			log,
+			nimiqVerifier,
+			paymentRequestUC.ReconciliationPolicy{
 				Interval:  cfg.Payments.ReconciliationInterval,
 				Deadline:  cfg.Payments.ReconciliationDeadline,
 				BatchSize: cfg.Payments.ReconciliationBatchSize,
 			},
 		)
-		purchaseWorker := purchaseUC.NewReconciliationWorker(purchaseUseCase, log)
-		go purchaseWorker.Run(reconciliationCtx)
+		paymentRequestWorker := paymentRequestUC.NewReconciliationWorker(paymentRequestUseCase, log)
+		go paymentRequestWorker.Run(reconciliationCtx)
 	}
+	purchaseUseCase = purchaseUseCase.WithEventBus(eventBus)
+	paymentRequestUseCase = paymentRequestUseCase.WithEventBus(eventBus)
+	walletNetwork := strings.TrimSpace(cfg.Payments.NimiqNetwork)
+	if walletNetwork == "" {
+		walletNetwork = cfg.NimiqAuth.Network
+	}
+	walletUseCase := walletUC.NewWalletUseCase(nimiqAuthRepo, nimiqRPC.NewWalletReader(nimiqClient), walletNetwork)
 	profileUseCase := profileUC.NewProfileUseCase(pgProfile.NewProfileRepo(db), eventRepo)
 	nearbyPlacesUC := placeUC.NewNearbyPlacesUseCase(placeRepo)
 	calendarUseCase := calendarUC.NewCalendarUseCase(calendarRepo, eventRepo)
@@ -319,22 +383,37 @@ func buildDependencies(
 	})
 
 	// --- Handlers ---
-	deps.IAMHandler = iamHandler.NewHandler(registerUC, loginUC, assignRoleUC, userRepo)
-	deps.TenantHandler = tenantHandler.NewHandler(
-		createOrgUC,
-		createAppUC,
-		manageKeysUC,
-		createWorkspaceUC,
-		listWorkspacesUC,
-		updateWorkspaceUC,
-		orgRepo,
-		appRepo,
-	)
-	deps.APIMgmtHandler = apimgmtHandler.NewHandler(defineEndpointUC, updatePolicyUC, retireEndpointUC, activateEndpointUC, endpointRepo, policyRepo)
-	deps.AuditHandler = auditHandler.NewHandler(auditRepo)
+	deps.IAMHandler = iamHandler.NewHandler(registerUC, loginUC, assignRoleUC, userRepo, nimiqAuthUC, cfg.NimiqAuth, time.Duration(cfg.JWT.ExpirationHours)*time.Hour, authLimiter(redisClient))
+	deps.IAMHandler.SetEmailAuthEnabled(cfg.EmailAuth.Enabled)
+	deps.IAMHandler.SetDeleteAccountUseCase(iamUC.NewDeleteAccountUseCase(pgIam.NewAccountDeletionRepo(db)))
+	if cfg.Platform.APIEnabled {
+		deps.TenantHandler = tenantHandler.NewHandler(
+			createOrgUC,
+			createAppUC,
+			manageKeysUC,
+			createWorkspaceUC,
+			listWorkspacesUC,
+			updateWorkspaceUC,
+			orgRepo,
+			appRepo,
+		)
+		deps.APIMgmtHandler = apimgmtHandler.NewHandler(defineEndpointUC, updatePolicyUC, retireEndpointUC, activateEndpointUC, endpointRepo, policyRepo)
+		deps.AuditHandler = auditHandler.NewHandler(auditRepo)
+	}
 	deps.EventHandler = eventHandler.NewHandler(eventUseCase)
 	deps.ParticipationHandler = participationHandler.NewHandler(participationUseCase)
-	deps.PurchaseHandler = eventpurchaseHandler.NewHandler(purchaseUseCase)
+	deps.PurchaseHandler = eventpurchaseHandler.NewHandler(purchaseUseCase, authLimiter(redisClient), eventpurchaseHandler.Limits{
+		Create: cfg.Payments.PurchaseCreateLimit,
+		Submit: cfg.Payments.PurchaseSubmitLimit,
+		Window: cfg.Payments.PurchaseRateLimitWindow,
+	})
+	deps.PaymentRequestHandler = paymentrequestHandler.NewHandler(paymentRequestUseCase, authLimiter(redisClient), paymentrequestHandler.Limits{
+		Create: cfg.Payments.RequestCreateLimit,
+		Lookup: cfg.Payments.RequestLookupLimit,
+		Submit: cfg.Payments.RequestSubmitLimit,
+		Window: cfg.Payments.RequestRateLimitWindow,
+	})
+	deps.WalletHandler = walletHandler.NewHandler(walletUseCase)
 	deps.ProfileHandler = profileHandler.NewHandler(profileUseCase)
 	deps.PlaceHandler = placeHandler.NewHandler(nearbyPlacesUC)
 	deps.CalendarHandler = calendarHandler.NewHandler(calendarUseCase)
@@ -343,12 +422,21 @@ func buildDependencies(
 	wsHub := infraWS.NewHub(log, cfg.WebSocket.MaxConnections)
 	eventBridge := infraWS.NewEventBridge(wsHub, appRepo, log)
 	eventBridge.Register(eventBus)
+	instanceID := uuid.New().String()
+	if redisRelay := infraWS.NewRedisRelay(redisClient, instanceID, log); redisRelay != nil {
+		eventBridge.SetRelay(redisRelay, instanceID)
+		go redisRelay.Listen(reconciliationCtx, eventBridge.DeliverFanout)
+		log.Info("realtime redis fanout enabled")
+	} else {
+		log.Info("realtime redis fanout disabled, local websocket delivery only")
+	}
 
-	validateConnectUC := realtimeUC.NewValidateConnectUseCase(appRepo, rbacService)
+	validateConnectUC := realtimeUC.NewValidateConnectUseCase(appRepo, rbacService).WithUsers(userRepo)
 	wsUpgrader := infraWS.NewUpgrader(infraWS.UpgraderConfig{
-		ReadBufferSize:  cfg.WebSocket.ReadBufferSize,
-		WriteBufferSize: cfg.WebSocket.WriteBufferSize,
-		AllowedOrigins:  cfg.Server.CORSAllowedOrigins,
+		ReadBufferSize:   cfg.WebSocket.ReadBufferSize,
+		WriteBufferSize:  cfg.WebSocket.WriteBufferSize,
+		AllowedOrigins:   cfg.Server.CORSAllowedOrigins,
+		AllowEmptyOrigin: cfg.WebSocket.AllowEmptyOrigin,
 	})
 	deps.RealtimeHandler = realtimeHandler.NewHandler(realtimeHandler.Config{
 		ValidateUC:   validateConnectUC,
@@ -358,6 +446,7 @@ func buildDependencies(
 		PingInterval: cfg.WebSocket.PingIntervalSec,
 		Logger:       log,
 		Enabled:      cfg.WebSocket.Enabled,
+		CookieName:   cfg.NimiqAuth.CookieName,
 	})
 
 	// --- Gateway pipeline with interceptors ---
@@ -374,22 +463,31 @@ func buildDependencies(
 	// 2. HTTP proxy to external services (if backend_service is a URL or configured)
 	// 3. Generic dynamic database handler (automatically performs CRUD operations)
 	backendRegistry := gateway.NewBackendRegistry()
-	dynamicResolver := gateway.NewDynamicHandlerResolver(backendRegistry, log, db)
+	dynamicResolver := gateway.NewDynamicHandlerResolver(backendRegistry, log, db).WithAllowedTables(cfg.Platform.GatewayTableAllowlist)
 
 	// Service proxies and custom handlers must be backed by an authoritative
 	// data source and registered explicitly. NIMNear registers none by default.
 
 	// Wire interceptors into gateway pipeline with dynamic resolver
-	deps.GatewayPipeline = gateway.NewPipeline(
-		endpointRepo,
-		policyRepo,
-		rbacService,
-		redisClient,
-		log,
-		dynamicResolver, // Dynamic handler resolver (supports registered handlers, HTTP proxy, and generic handling)
-		schemaValidator, // Schema validation interceptor
-		piiMasker,       // PII masking interceptor
-	)
+	if cfg.Platform.APIEnabled {
+		deps.GatewayPipeline = gateway.NewPipeline(
+			endpointRepo,
+			policyRepo,
+			rbacService,
+			redisClient,
+			log,
+			dynamicResolver,
+			schemaValidator,
+			piiMasker,
+		)
+	}
 
 	return deps
+}
+
+func authLimiter(redisClient *redis.Client) ratelimit.Limiter {
+	if limiter := ratelimit.NewRedisLimiter(redisClient); limiter != nil {
+		return limiter
+	}
+	return ratelimit.NewMemoryLimiter()
 }

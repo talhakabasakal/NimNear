@@ -85,7 +85,7 @@ func (s *JWTService) ValidateToken(_ context.Context, tokenStr string) (*service
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return s.secret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithIssuer(s.issuer))
 	if err != nil {
 		return nil, domainErr.New(domainErr.ErrUnauthorized, "invalid token", err)
 	}

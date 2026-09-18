@@ -54,10 +54,19 @@ func (h *Hub) Register(info realtimeService.ClientInfo, send chan []byte) (unreg
 		hub:  h,
 	}
 	h.clients[c.id] = c
+	incWSConnections(1)
 
-	defaultRoom, err := model.BuildRoomKey(info.OrganizationID, info.AppID, model.DefaultChannel)
-	if err == nil {
-		h.addToRoomLocked(c, defaultRoom)
+	if info.OrganizationID != uuid.Nil && info.AppID != uuid.Nil {
+		defaultRoom, err := model.BuildRoomKey(info.OrganizationID, info.AppID, model.DefaultChannel)
+		if err == nil {
+			h.addToRoomLocked(c, defaultRoom)
+		}
+	}
+	if info.UserID != uuid.Nil {
+		userRoom, err := model.BuildUserRoomKey(info.UserID, model.PaymentsChannel)
+		if err == nil {
+			h.addToRoomLocked(c, userRoom)
+		}
 	}
 
 	return func() { h.removeClient(c) }
@@ -72,7 +81,7 @@ func (h *Hub) Subscribe(clientID, channel string) error {
 	if !ok {
 		return fmt.Errorf("client not found")
 	}
-	room, err := model.BuildRoomKey(c.info.OrganizationID, c.info.AppID, channel)
+	room, err := h.roomForClientLocked(c, channel)
 	if err != nil {
 		return err
 	}
@@ -89,12 +98,22 @@ func (h *Hub) Unsubscribe(clientID, channel string) error {
 	if !ok {
 		return fmt.Errorf("client not found")
 	}
-	room, err := model.BuildRoomKey(c.info.OrganizationID, c.info.AppID, channel)
+	room, err := h.roomForClientLocked(c, channel)
 	if err != nil {
 		return err
 	}
 	h.removeFromRoomLocked(c, room)
 	return nil
+}
+
+func (h *Hub) roomForClientLocked(c *client, channel string) (model.RoomKey, error) {
+	if c.info.OrganizationID == uuid.Nil || c.info.AppID == uuid.Nil {
+		if channel != model.PaymentsChannel {
+			return "", fmt.Errorf("channel not available without app context")
+		}
+		return model.BuildUserRoomKey(c.info.UserID, model.PaymentsChannel)
+	}
+	return model.BuildRoomKey(c.info.OrganizationID, c.info.AppID, channel)
 }
 
 // SendToClient delivers a message to a single connected client.
@@ -168,6 +187,7 @@ func (h *Hub) Close(ctx context.Context) error {
 	defer h.mu.Unlock()
 
 	h.closed = true
+	incWSConnections(-float64(len(h.clients)))
 	for _, c := range h.clients {
 		c.closeSend()
 	}
@@ -202,6 +222,7 @@ func (h *Hub) removeClient(c *client) {
 		return
 	}
 	delete(h.clients, c.id)
+	incWSConnections(-1)
 	for room := range c.rooms {
 		if members, ok := h.rooms[room]; ok {
 			delete(members, c.id)

@@ -40,7 +40,7 @@ func TestSubmitTransactionUsesServerStateAndVerifierOutcome(t *testing.T) {
 	purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusPending, CreatedAt: now, UpdatedAt: now}
 	verifier := &scriptedVerifier{outcome: verification.OutcomeNotFinal}
 	repo := &fakePurchaseRepository{purchase: purchase}
-	uc := NewPurchaseUseCaseWithVerifier(repo, time.Minute, verifier, "merchant", "MainAlbatross")
+	uc := NewPurchaseUseCaseWithVerifier(repo, time.Minute, verifier, "merchant", "MainAlbatross").WithIdentities(identityStub{addresses: []string{"NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604"}})
 	uc.now = func() time.Time { return now }
 
 	result, err := uc.SubmitTransaction(context.Background(), purchase.ID, purchase.UserID, strings.Repeat("A", 64))
@@ -61,7 +61,7 @@ func TestSubmitTransactionUsesServerStateAndVerifierOutcome(t *testing.T) {
 func TestSubmitTransactionConfirmsOnlyVerifierConfirmation(t *testing.T) {
 	purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusPending}
 	verifier := &scriptedVerifier{outcome: verification.OutcomeConfirmed}
-	uc := NewPurchaseUseCaseWithVerifier(&fakePurchaseRepository{purchase: purchase}, time.Minute, verifier, "merchant", "MainAlbatross")
+	uc := NewPurchaseUseCaseWithVerifier(&fakePurchaseRepository{purchase: purchase}, time.Minute, verifier, "merchant", "MainAlbatross").WithIdentities(identityStub{addresses: []string{"NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604"}})
 
 	result, err := uc.SubmitTransaction(context.Background(), purchase.ID, purchase.UserID, strings.Repeat("a", 64))
 	if err != nil {
@@ -172,5 +172,109 @@ func TestReconcileUsesBoundedBatchAndDeterministicCandidates(t *testing.T) {
 	}
 	if candidates[0].Status != model.StatusConfirmed || candidates[1].Status != model.StatusFailed {
 		t.Fatalf("candidate states = %q, %q", candidates[0].Status, candidates[1].Status)
+	}
+}
+
+func TestSubmitTransactionRejectsDuplicateHash(t *testing.T) {
+	owned := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusPending}
+	uc := NewPurchaseUseCaseWithVerifier(&fakePurchaseRepository{purchase: owned}, time.Minute, &scriptedVerifier{outcome: verification.OutcomeNotFinal}, "merchant", "MainAlbatross").WithIdentities(identityStub{addresses: []string{"NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604"}})
+
+	result, err := uc.SubmitTransaction(context.Background(), uuid.New(), owned.UserID, strings.Repeat("a", 64))
+	if err == nil || !errors.Is(err, domainErr.ErrAlreadyExists) {
+		t.Fatalf("error = %v, want already exists", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %#v, want nil", result)
+	}
+}
+
+func TestSubmitTransactionFailsClosedWhenVerifierDisabled(t *testing.T) {
+	purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusPending}
+	repo := &fakePurchaseRepository{purchase: purchase}
+	uc := NewPurchaseUseCase(repo, time.Minute)
+
+	result, err := uc.SubmitTransaction(context.Background(), purchase.ID, purchase.UserID, strings.Repeat("a", 64))
+	if err == nil || domainErr.ErrorCode(err) != "payment_not_configured" {
+		t.Fatalf("error = %v, want payment_not_configured", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %#v, want nil", result)
+	}
+	if purchase.TransactionHash != nil || purchase.Status != model.StatusPending {
+		t.Fatalf("submit mutated purchase without verifier: %#v", purchase)
+	}
+	if repo.submitCalls != 0 {
+		t.Fatalf("submit reached the repository %d times", repo.submitCalls)
+	}
+}
+
+func TestCreateRequiresVerifiedNimiqIdentity(t *testing.T) {
+	purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusPending}
+	repo := &fakePurchaseRepository{purchase: purchase}
+	uc := NewPurchaseUseCaseWithVerifier(repo, time.Minute, &scriptedVerifier{}, "merchant", "MainAlbatross").WithIdentities(identityStub{})
+	if _, err := uc.Create(context.Background(), purchase.EventID, purchase.UserID); err == nil || domainErr.ErrorCode(err) != "no_verified_nimiq_identity" {
+		t.Fatalf("error = %v, want no_verified_nimiq_identity", err)
+	}
+	if repo.gotEvent != uuid.Nil {
+		t.Fatal("create reached the repository without a verified identity")
+	}
+}
+
+func TestRecoverExpiredConfirmsOnlyFullVerifierSuccess(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	hash := strings.Repeat("d", 64)
+	purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusExpired, TransactionHash: &hash, CreatedAt: now, UpdatedAt: now}
+	verifier := &scriptedVerifier{outcome: verification.OutcomeConfirmed}
+	uc := NewPurchaseUseCaseWithVerifier(&fakePurchaseRepository{purchase: purchase}, time.Minute, verifier, "merchant", "MainAlbatross").WithIdentities(identityStub{addresses: []string{"NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604"}})
+	uc.now = func() time.Time { return now }
+
+	result, err := uc.RecoverExpired(context.Background(), purchase.ID, purchase.UserID)
+	if err != nil {
+		t.Fatalf("RecoverExpired returned error: %v", err)
+	}
+	if result.Data.Status != string(model.StatusConfirmed) {
+		t.Fatalf("status = %q, want confirmed", result.Data.Status)
+	}
+
+	again, err := uc.RecoverExpired(context.Background(), purchase.ID, purchase.UserID)
+	if err != nil {
+		t.Fatalf("idempotent recover error: %v", err)
+	}
+	if again.Data.Status != string(model.StatusConfirmed) {
+		t.Fatalf("idempotent status = %q", again.Data.Status)
+	}
+}
+
+func TestRecoverExpiredDoesNotConfirmUncertainOrInvalidPayments(t *testing.T) {
+	hash := strings.Repeat("e", 64)
+	for _, test := range []struct {
+		name    string
+		outcome verification.Outcome
+		err     error
+	}{
+		{name: "not final", outcome: verification.OutcomeNotFinal},
+		{name: "not found", outcome: verification.OutcomeNotFound},
+		{name: "invalid", outcome: verification.OutcomeInvalid},
+		{name: "rpc error", err: errors.New("rpc unavailable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusExpired, TransactionHash: &hash}
+			uc := NewPurchaseUseCaseWithVerifier(&fakePurchaseRepository{purchase: purchase}, time.Minute, &scriptedVerifier{outcome: test.outcome, err: test.err}, "merchant", "MainAlbatross")
+			result, err := uc.RecoverExpired(context.Background(), purchase.ID, purchase.UserID)
+			if err != nil {
+				t.Fatalf("RecoverExpired returned error: %v", err)
+			}
+			if result.Data.Status != string(model.StatusExpired) {
+				t.Fatalf("status = %q, want expired", result.Data.Status)
+			}
+		})
+	}
+}
+
+func TestRecoverExpiredRejectsMissingHash(t *testing.T) {
+	purchase := &model.Purchase{ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 250000, Status: model.StatusExpired}
+	uc := NewPurchaseUseCaseWithVerifier(&fakePurchaseRepository{purchase: purchase}, time.Minute, &scriptedVerifier{outcome: verification.OutcomeConfirmed}, "merchant", "MainAlbatross")
+	if _, err := uc.RecoverExpired(context.Background(), purchase.ID, purchase.UserID); err == nil || domainErr.ErrorCode(err) != "purchase_not_recoverable" {
+		t.Fatalf("error = %v, want purchase_not_recoverable", err)
 	}
 }

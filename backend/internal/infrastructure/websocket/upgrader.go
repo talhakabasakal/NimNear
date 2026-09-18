@@ -16,9 +16,10 @@ const (
 
 // UpgraderConfig holds WebSocket upgrader settings.
 type UpgraderConfig struct {
-	ReadBufferSize  int
-	WriteBufferSize int
-	AllowedOrigins  []string
+	ReadBufferSize   int
+	WriteBufferSize  int
+	AllowedOrigins   []string
+	AllowEmptyOrigin bool
 }
 
 // NewUpgrader creates a configured gorilla/websocket upgrader.
@@ -35,25 +36,28 @@ func NewUpgrader(cfg UpgraderConfig) gorillaws.Upgrader {
 	return gorillaws.Upgrader{
 		ReadBufferSize:  readBuf,
 		WriteBufferSize: writeBuf,
-		CheckOrigin:     originChecker(cfg.AllowedOrigins),
+		CheckOrigin:     originChecker(cfg.AllowedOrigins, cfg.AllowEmptyOrigin),
 	}
 }
 
-func originChecker(allowed []string) func(*http.Request) bool {
-	if len(allowed) == 0 {
-		return func(*http.Request) bool { return true }
-	}
+func originChecker(allowed []string, allowEmpty bool) func(*http.Request) bool {
 	allowedSet := make(map[string]struct{}, len(allowed))
-	for _, o := range allowed {
-		allowedSet[strings.TrimSpace(o)] = struct{}{}
+	for _, origin := range allowed {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed != "" {
+			allowedSet[trimmed] = struct{}{}
+		}
 	}
 	return func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin == "" {
-			return true
+			return allowEmpty
 		}
 		if _, ok := allowedSet["*"]; ok {
 			return true
+		}
+		if len(allowedSet) == 0 {
+			return allowEmpty
 		}
 		_, ok := allowedSet[origin]
 		return ok

@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	DefaultChannel = "events"
-	MaxChannelLen  = 64
+	DefaultChannel  = "events"
+	PaymentsChannel = "payments"
+	MaxChannelLen   = 64
 )
 
 var channelNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
@@ -57,6 +58,21 @@ func ParseRoomKey(key RoomKey) (orgID, appID uuid.UUID, channel string, err erro
 		return uuid.Nil, uuid.Nil, "", fmt.Errorf("invalid app id in room key")
 	}
 	return orgID, appID, channelSplit[1], nil
+}
+
+// BuildUserRoomKey creates a user-scoped room for authorized domain events.
+func BuildUserRoomKey(userID uuid.UUID, channel string) (RoomKey, error) {
+	if userID == uuid.Nil {
+		return "", fmt.Errorf("user id is required")
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		channel = PaymentsChannel
+	}
+	if !channelNameRe.MatchString(channel) {
+		return "", fmt.Errorf("invalid channel name: %s", channel)
+	}
+	return RoomKey(fmt.Sprintf("user:%s:channel:%s", userID, channel)), nil
 }
 
 // ValidateChannelName checks whether a channel name is allowed.

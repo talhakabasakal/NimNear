@@ -3,7 +3,10 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { resolveCollectionState } from "../lib/collection-state.ts";
-import { locationStateForError, nearbyResultState } from "../lib/location-state.ts";
+import {
+  locationStateForError,
+  nearbyResultState,
+} from "../lib/location-state.ts";
 
 test("an API error never exposes supplied stale or fabricated records", () => {
   const state = resolveCollectionState([{ id: "stale-record" }], "api");
@@ -28,10 +31,13 @@ test("a successful API response preserves only its returned records", () => {
 });
 
 test("the homepage labels the backend feed as upcoming, not popular", () => {
-  const page = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const page = fs.readFileSync(
+    new URL("../app/page.tsx", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(page, /Yaklaşan etkinlikler/);
-  assert.doesNotMatch(page, /Popüler etkinlikler|popular|popularity|trending/i);
+  assert.match(page, /Upcoming events/);
+  assert.doesNotMatch(page, /Popular events|popular|popularity|trending/i);
 });
 
 test("geolocation errors stay distinct", () => {
@@ -50,27 +56,57 @@ test("nearby API errors and empty results remain distinct", () => {
 });
 
 test("calendar navigation and surface are backend-backed, not a placeholder", () => {
-  const header = fs.readFileSync(new URL("../components/app/app-header.tsx", import.meta.url), "utf8");
-  const page = fs.readFileSync(new URL("../app/calendars/page.tsx", import.meta.url), "utf8");
+  const header = fs.readFileSync(
+    new URL("../components/app/app-header.tsx", import.meta.url),
+    "utf8",
+  );
+  const page = fs.readFileSync(
+    new URL("../app/calendars/page.tsx", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(header, /href: "\/calendars", label: "Takvimler"/);
+  assert.match(header, /href: "\/calendars", label: "Calendars"/);
   assert.match(page, /fetchCalendars/);
-  assert.match(page, /Henüz herkese açık takvim yok/);
-  assert.doesNotMatch(page, /Takvimler yakında burada|calendar mock|coming soon/i);
+  assert.match(page, /No public calendars yet/);
+  assert.doesNotMatch(
+    page,
+    /Calendars coming soon|calendar mock|coming soon/i,
+  );
 });
 
-test("calendar mutation UI keeps native connection separate from backend authentication", () => {
-  const workspace = fs.readFileSync(new URL("../components/calendars/calendar-workspace.tsx", import.meta.url), "utf8");
+test("calendar mutation UI uses the wallet authentication component", () => {
+  const workspace = fs.readFileSync(
+    new URL("../components/calendars/calendar-workspace.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(workspace, /NimiqConnect/);
-  assert.match(workspace, /backend oturumu oluşturmaz/);
+  assert.match(workspace, /Sign in securely with your Nimiq wallet/);
+  assert.doesNotMatch(workspace, /does not create a backend session/);
   assert.match(workspace, /createCalendar/);
+  assert.match(workspace, /updateCalendar/);
+  assert.match(workspace, /archiveCalendar/);
   assert.doesNotMatch(workspace, /demo|mock|fake calendar/i);
 });
 
+test("wallet authentication opens in an accessible application modal", () => {
+  const connect = fs.readFileSync(
+    new URL("../components/auth/nimiq-connect.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(connect, /createPortal/);
+  assert.match(connect, /role="dialog"/);
+  assert.match(connect, /aria-modal="true"/);
+  assert.match(connect, /aria-haspopup="dialog"/);
+  assert.match(connect, /event\.key === "Escape"/);
+});
 
 test("event creation exposes only persisted backend fields", () => {
-  const form = fs.readFileSync(new URL("../components/events/create-event-form.tsx", import.meta.url), "utf8");
+  const form = fs.readFileSync(
+    new URL("../components/events/create-event-form.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(form, /fetchMyCalendars/);
   assert.match(form, /fetchNearbyPlaces/);
@@ -82,10 +118,17 @@ test("event creation exposes only persisted backend fields", () => {
 });
 
 test("NIM price handling is exact and rejects unsupported precision", () => {
-  const eventsApi = fs.readFileSync(new URL("../lib/api/events.ts", import.meta.url), "utf8");
+  const eventsApi = fs.readFileSync(
+    new URL("../lib/api/events.ts", import.meta.url),
+    "utf8",
+  );
+  const amountApi = fs.readFileSync(
+    new URL("../lib/nimiq/amount.ts", import.meta.url),
+    "utf8",
+  );
 
   assert.match(eventsApi, /function nimToLunas/);
-  assert.match(eventsApi, /BigInt\("100000"\)/);
-  assert.match(eventsApi, /fractionPart.length > 5/);
   assert.match(eventsApi, /function normalizeNimPrice/);
+  assert.match(amountApi, /BigInt\("100000"\)/);
+  assert.match(amountApi, /fractionPart.length > 5/);
 });

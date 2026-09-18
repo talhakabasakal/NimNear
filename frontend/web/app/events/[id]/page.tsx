@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -14,8 +15,21 @@ type EventDetailPageProps = {
   params: Promise<{ id: string }>;
 };
 
+export async function generateMetadata({ params }: EventDetailPageProps): Promise<Metadata> {
+  const { id } = await params;
+  try {
+    const event = await fetchEvent(id);
+    return {
+      title: event.title,
+      description: event.description.trim().slice(0, 160) || "Public NIMNear event",
+    };
+  } catch {
+    return { title: "Event" };
+  }
+}
+
 function BackToEvents() {
-  return <Link href="/events" className="mb-6 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Etkinlikler</Link>;
+  return <Link href="/events" className="mb-6 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Events</Link>;
 }
 
 function EventLoadError() {
@@ -24,7 +38,7 @@ function EventLoadError() {
       <AppHeader />
       <main className="mx-auto max-w-[1120px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
         <BackToEvents />
-        <StateCard kind="error" title="Etkinlik yüklenemedi" description="Etkinlik servisine şu anda ulaşılamıyor." />
+        <StateCard kind="error" title="Event could not be loaded" description="The event service is currently unavailable." />
       </main>
     </div>
   );

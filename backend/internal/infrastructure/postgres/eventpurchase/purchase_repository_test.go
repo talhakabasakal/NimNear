@@ -3,8 +3,6 @@ package eventpurchase
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,24 +10,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/model"
+	"github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/testdb"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 )
 
 func testPurchaseDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("NIMNEAR_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("NIMNEAR_TEST_DATABASE_URL is not set")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("connect test database: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if err := pool.Ping(context.Background()); err != nil {
-		t.Fatalf("ping test database: %v", err)
-	}
-	return pool
+	return testdb.Open(t)
 }
 
 func createPurchaseFixture(t *testing.T, pool *pgxpool.Pool, capacity *int, price int64, end time.Time) (uuid.UUID, uuid.UUID, uuid.UUID) {
@@ -48,6 +35,10 @@ func createPurchaseFixture(t *testing.T, pool *pgxpool.Pool, capacity *int, pric
 		t.Fatalf("insert fixture event: %v", err)
 	}
 	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `
+			DELETE FROM consumed_nimiq_transactions
+			WHERE domain_type = 'event_purchase'
+			  AND domain_id IN (SELECT id FROM event_purchases WHERE event_id = $1)`, eventID)
 		_, _ = pool.Exec(ctx, "DELETE FROM events WHERE id = $1", eventID)
 		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id IN ($1, $2)", userOne, userTwo)
 	})
@@ -174,7 +165,7 @@ func TestPurchaseRepositoryVerificationClaimIsExclusiveAndTerminalStateWins(t *t
 		t.Fatalf("create purchase: %v", err)
 	}
 	deadline := now.Add(time.Hour)
-	purchase, err = repo.SubmitTransaction(context.Background(), purchase.ID, userOne, strings.Repeat("a", 64), now, deadline)
+	purchase, err = repo.SubmitTransaction(context.Background(), purchase.ID, userOne, testdb.UniqueHash("a"), now, deadline)
 	if err != nil {
 		t.Fatalf("submit transaction: %v", err)
 	}
@@ -209,8 +200,10 @@ func TestPurchaseRepositoryVerificationClaimIsExclusiveAndTerminalStateWins(t *t
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
 	}
-	if len(candidates) != 0 {
-		t.Fatalf("candidate count while claim is leased = %d, want 0", len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ID == purchase.ID {
+			t.Fatal("leased purchase appeared as a reconciliation candidate")
+		}
 	}
 
 	confirmed, err := repo.SetVerificationState(context.Background(), purchase.ID, userOne, model.StatusConfirmed, now.Add(time.Minute))
@@ -257,7 +250,7 @@ func TestPurchaseRepositoryTransactionHashSubmissionIsIdempotentAndUnique(t *tes
 	if err != nil {
 		t.Fatalf("create second purchase: %v", err)
 	}
-	hash := strings.Repeat("b", 64)
+	hash := testdb.UniqueHash("b")
 	if _, err := repo.SubmitTransaction(context.Background(), first.ID, userOne, hash, now, now.Add(time.Hour)); err != nil {
 		t.Fatalf("submit first purchase: %v", err)
 	}
@@ -283,7 +276,7 @@ func TestPurchaseRepositoryExpiredUnresolvedPaymentReleasesCapacity(t *testing.T
 	if err != nil {
 		t.Fatalf("create first purchase: %v", err)
 	}
-	if _, err := repo.SubmitTransaction(context.Background(), first.ID, userOne, strings.Repeat("c", 64), now, now.Add(-time.Minute)); err != nil {
+	if _, err := repo.SubmitTransaction(context.Background(), first.ID, userOne, testdb.UniqueHash("c"), now, now.Add(-time.Minute)); err != nil {
 		t.Fatalf("submit stale purchase: %v", err)
 	}
 	if expired, err := repo.ExpireUnresolved(context.Background(), first.ID, userOne, now, time.Hour); err != nil {
@@ -297,5 +290,83 @@ func TestPurchaseRepositoryExpiredUnresolvedPaymentReleasesCapacity(t *testing.T
 	}
 	if replacement.Status != model.StatusPending {
 		t.Fatalf("replacement status = %q, want pending", replacement.Status)
+	}
+}
+
+func TestPurchaseRepositoryConcurrentDuplicateHashOnlyOneWins(t *testing.T) {
+	pool := testPurchaseDB(t)
+	repo := NewPurchaseRepo(pool)
+	now := time.Now().UTC()
+	eventID, userOne, userTwo := createPurchaseFixture(t, pool, nil, 1250000, now.Add(2*time.Hour))
+	first, err := repo.Create(context.Background(), eventID, userOne, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	second, err := repo.Create(context.Background(), eventID, userTwo, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	hash := testdb.UniqueHash("d")
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, item := range []struct {
+		id   uuid.UUID
+		user uuid.UUID
+	}{{first.ID, userOne}, {second.ID, userTwo}} {
+		wg.Add(1)
+		go func(id, user uuid.UUID) {
+			defer wg.Done()
+			_, submitErr := repo.SubmitTransaction(context.Background(), id, user, hash, now, now.Add(time.Hour))
+			results <- submitErr
+		}(item.id, item.user)
+	}
+	wg.Wait()
+	close(results)
+	var successes, conflicts int
+	for submitErr := range results {
+		if submitErr == nil {
+			successes++
+			continue
+		}
+		if errors.Is(submitErr, domainErr.ErrAlreadyExists) {
+			conflicts++
+			continue
+		}
+		t.Fatalf("unexpected concurrent result: %v", submitErr)
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+}
+
+func TestPurchaseRepositoryExpiredRecoveryIsIdempotent(t *testing.T) {
+	pool := testPurchaseDB(t)
+	repo := NewPurchaseRepo(pool)
+	now := time.Now().UTC()
+	eventID, userOne, _ := createPurchaseFixture(t, pool, nil, 1250000, now.Add(2*time.Hour))
+	purchase, err := repo.Create(context.Background(), eventID, userOne, now, time.Minute)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := repo.SubmitTransaction(context.Background(), purchase.ID, userOne, testdb.UniqueHash("e"), now, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	expired, err := repo.ExpireUnresolved(context.Background(), purchase.ID, userOne, now, time.Hour)
+	if err != nil || expired.Status != model.StatusExpired {
+		t.Fatalf("expire = %#v %v", expired, err)
+	}
+	confirmed, err := repo.ConfirmExpiredRecovery(context.Background(), purchase.ID, userOne, now)
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if confirmed.Status != model.StatusConfirmed {
+		t.Fatalf("status = %q", confirmed.Status)
+	}
+	again, err := repo.ConfirmExpiredRecovery(context.Background(), purchase.ID, userOne, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("idempotent recover: %v", err)
+	}
+	if again.Status != model.StatusConfirmed {
+		t.Fatalf("idempotent status = %q", again.Status)
 	}
 }

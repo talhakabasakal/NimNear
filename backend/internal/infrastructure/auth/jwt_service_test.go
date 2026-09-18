@@ -91,3 +91,21 @@ func TestJWTService_WrongSecret(t *testing.T) {
 	_, err = svc2.ValidateToken(ctx, token)
 	assert.Error(t, err)
 }
+
+func TestJWTService_RejectsWrongIssuer(t *testing.T) {
+	issuer := NewJWTService(config.JWTConfig{
+		Secret:          "test-secret-key-for-testing-only",
+		ExpirationHours: 1,
+		Issuer:          "nimnear-production",
+	})
+	other := NewJWTService(config.JWTConfig{
+		Secret:          "test-secret-key-for-testing-only",
+		ExpirationHours: 1,
+		Issuer:          "other-issuer",
+	})
+	ctx := context.Background()
+	token, err := issuer.GenerateToken(ctx, service.TokenClaims{UserID: uuid.New(), Email: "test@example.com"})
+	require.NoError(t, err)
+	_, err = other.ValidateToken(ctx, token)
+	assert.Error(t, err)
+}

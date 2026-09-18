@@ -44,7 +44,7 @@ Loading, empty, unavailable-image, and neutral identity fallbacks are UI states,
 ### P1 — Paid confirmation has no entitlement, ticket, or paid attendance projection
 
 - Affected files: `backend/internal/application/eventpurchase`, `backend/internal/infrastructure/postgres/eventpurchase`, migrations `00019_create_event_purchases.sql` and `00020_payment_verification_states.sql`, `backend/internal/infrastructure/postgres/event/event_repository.go`, `frontend/web/components/events/event-purchase.tsx`, `frontend/web/components/profile/profile-screen.tsx`.
-- Current behavior: a finalized transfer becomes a confirmed purchase and the UI stops at “Ödeme doğrulandı.” There is no entitlement/ticket record, ticket delivery, ticket ownership API, or QR payload. Attended profile events are sourced only from `event_participants`, so a confirmed paid purchase is not included in attended-event history.
+- Current behavior: a finalized transfer becomes a confirmed purchase and the UI stops at “Payment verified.” There is no entitlement/ticket record, ticket delivery, ticket ownership API, or QR payload. Attended profile events are sourced only from `event_participants`, so a confirmed paid purchase is not included in attended-event history.
 - Desired final behavior: one confirmed purchase creates a durable, owner-scoped entitlement/ticket and the attended history reflects the product's chosen definition of attendance.
 - Backend/API dependency: ticket/entitlement domain, idempotent confirmation hook or worker, ownership model, and product decision on one ticket versus multiple tickets.
 - Recommended fix: define the entitlement contract before implementing ticket UI; make confirmation-to-entitlement creation idempotent and server-owned.
@@ -53,7 +53,7 @@ Loading, empty, unavailable-image, and neutral identity fallbacks are UI states,
 ### P1 — Confirmed Figma calendar and city experiences are not implemented
 
 - Affected files: `frontend/web/components/app/app-header.tsx:10-28`, `frontend/web/app`, `frontend/web/app/page.tsx`, `frontend/web/components/discover/city-card.tsx`, `docs/USER_FLOWS.md:59-67`.
-- Current behavior: `Takvimler` is a disabled “Yakında” navigation label and there is no calendar route, calendar API, create/follow model, or calendar result flow. The Figma-confirmed Istanbul city detail has no dedicated city route. City cards are non-linking presentation blocks.
+- Current behavior: `Calendars` is a disabled “Coming soon” navigation label and there is no calendar route, calendar API, create/follow model, or calendar result flow. The Figma-confirmed Istanbul city detail has no dedicated city route. City cards are non-linking presentation blocks.
 - Desired final behavior: either implement the confirmed calendar and city-detail contracts, or explicitly remove/de-scope their navigation and catalog presentation after a product decision.
 - Backend/API dependency: calendar/follow domain and city/place discovery/detail API, or an approved scope reduction.
 - Recommended fix: decide the scope first; do not add placeholder routes or fabricated calendar/city data.
@@ -116,7 +116,7 @@ Loading, empty, unavailable-image, and neutral identity fallbacks are UI states,
 ### P2 — “Popular events” is a temporary chronological slice, not popularity ranking
 
 - Affected files: `frontend/web/app/page.tsx:16-18,43-46`, `frontend/web/lib/api/events.ts:66-79`, `docs/FRONTEND.md:237-248`.
-- Current behavior: the homepage requests the first four upcoming events in backend chronological order while labeling the section “Popüler etkinlikler.” No popularity signal or ranking API exists.
+- Current behavior: the homepage requests the first four upcoming events in backend chronological order while labeling the section “Popular events.” No popularity signal or ranking API exists.
 - Desired final behavior: either label this as upcoming/nearby or add a product-approved popularity definition and API later.
 - Backend/API dependency: popularity metric and ranking policy, if retained.
 - Recommended fix: keep the current limitation documented and avoid implying a nonexistent ranking.
@@ -145,7 +145,7 @@ Loading, empty, unavailable-image, and neutral identity fallbacks are UI states,
 ### `/`
 
 - Backend data: `fetchEvents({ limit: 4 })` from `GET /api/v1/events`; event cards, price/status, count, date, location, and image come from the response.
-- Local/static data: Figma-derived hero copy, category catalog/icons, İstanbul labels, four city-card labels/descriptions, and the calendars “Yakında” empty state.
+- Local/static data: Figma-derived hero copy, category catalog/icons, İstanbul labels, four city-card labels/descriptions, and the calendars “Coming soon” empty state.
 - Classification: copy, icons, and design configuration are legitimate static UI. Categories and city names are static application catalog/location data, not confirmed fake records, and are not backend-driven.
 - Loading/empty/error: root loading skeleton exists; event API failure shows an error state; an empty event response shows an empty state; there is no fake-event fallback.
 - Silent fallback: none found. API failure returns `events: []` plus an error marker.
@@ -207,7 +207,7 @@ The following are the only explicit mock/demo locations found:
 - `backend/scripts/seed.go` seeds roles and permissions only. It does not seed events, profiles, places, attendees, purchases, or payment records.
 - `frontend/web/app/page.tsx` and discovery components contain hardcoded category/city presentation data. These are not proven fake/demo records, but they are static application data and are not backed by the places/events API.
 
-The following are explicitly not mock application data: loading skeletons, empty/error cards, missing-image gradient artwork, neutral `NIMNear kullanıcısı`/initial fallbacks, form placeholders, navigation labels, design tokens, Lucide icons, and actual values rendered from event/profile/purchase API responses.
+The following are explicitly not mock application data: loading skeletons, empty/error cards, missing-image gradient artwork, neutral `NIMNear user`/initial fallbacks, form placeholders, navigation labels, design tokens, Lucide icons, and actual values rendered from event/profile/purchase API responses.
 
 No static event array, static profile record, static attendee count, static price, static payment confirmation, fake session, or fake ticket state was found in the user-facing frontend.
 

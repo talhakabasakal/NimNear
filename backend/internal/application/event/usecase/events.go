@@ -140,6 +140,94 @@ func (uc *EventUseCase) Create(ctx context.Context, organizerID uuid.UUID, req d
 	return &dto.EventResponse{Data: MapEvent(event, uc.now().UTC())}, nil
 }
 
+// Update applies an authenticated organizer allowlisted event patch.
+func (uc *EventUseCase) Update(ctx context.Context, organizerID, eventID uuid.UUID, req dto.UpdateEventRequest) (*dto.EventResponse, error) {
+	if organizerID == uuid.Nil {
+		return nil, domainErr.New(domainErr.ErrUnauthorized, "user not authenticated", nil)
+	}
+	if eventID == uuid.Nil {
+		return nil, domainErr.New(domainErr.ErrBadRequest, "event id is required", nil)
+	}
+	if req.Empty() {
+		return nil, domainErr.New(domainErr.ErrValidation, "event update contains no fields", nil)
+	}
+	lifecycle, ok := uc.eventRepo.(repository.LifecycleRepository)
+	if !ok {
+		return nil, domainErr.New(domainErr.ErrInternal, "event lifecycle service is not configured", nil)
+	}
+	patch := req.Patch()
+	if patch.TitleSet {
+		patch.Title = strings.TrimSpace(patch.Title)
+		if patch.Title == "" || len(patch.Title) > 255 {
+			return nil, domainErr.New(domainErr.ErrValidation, "title must be between 1 and 255 characters", nil)
+		}
+	}
+	if patch.DescriptionSet && len(patch.Description) > 5000 {
+		return nil, domainErr.New(domainErr.ErrValidation, "description must be no more than 5000 characters", nil)
+	}
+	if patch.ImageURLSet && !validator.ValidMediaURL(patch.ImageURL) {
+		return nil, domainErr.New(domainErr.ErrValidation, "image_url must be an absolute HTTP(S) URL of no more than 2048 characters", nil)
+	}
+	if patch.CapacitySet && patch.Capacity != nil && *patch.Capacity < 1 {
+		return nil, domainErr.New(domainErr.ErrValidation, "capacity must be greater than 0", nil)
+	}
+	if (patch.StartsAtSet && patch.StartsAt.IsZero()) || (patch.EndsAtSet && patch.EndsAt.IsZero()) {
+		return nil, domainErr.New(domainErr.ErrValidation, "event times must be valid", nil)
+	}
+	if patch.PlaceIDSet && patch.PlaceID != nil {
+		if uc.placeRepo == nil {
+			return nil, domainErr.New(domainErr.ErrInternal, "place service is not configured", nil)
+		}
+		place, err := uc.placeRepo.GetActiveByID(ctx, *patch.PlaceID)
+		if err != nil {
+			return nil, err
+		}
+		if place == nil {
+			return nil, domainErr.New(domainErr.ErrNotFound, "place not found", nil)
+		}
+	}
+	event, err := lifecycle.UpdateOwned(ctx, eventID, organizerID, patch, uc.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return &dto.EventResponse{Data: MapEvent(event, uc.now().UTC())}, nil
+}
+
+// Cancel transitions an event to cancelled without deleting its evidence.
+func (uc *EventUseCase) Cancel(ctx context.Context, organizerID, eventID uuid.UUID) (*dto.EventResponse, error) {
+	if organizerID == uuid.Nil {
+		return nil, domainErr.New(domainErr.ErrUnauthorized, "user not authenticated", nil)
+	}
+	if eventID == uuid.Nil {
+		return nil, domainErr.New(domainErr.ErrBadRequest, "event id is required", nil)
+	}
+	lifecycle, ok := uc.eventRepo.(repository.LifecycleRepository)
+	if !ok {
+		return nil, domainErr.New(domainErr.ErrInternal, "event lifecycle service is not configured", nil)
+	}
+	event, err := lifecycle.CancelOwned(ctx, eventID, organizerID, uc.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return &dto.EventResponse{Data: MapEvent(event, uc.now().UTC())}, nil
+}
+
+// CancelByOperator applies the same cancellation transition without an organizer ownership check.
+func (uc *EventUseCase) CancelByOperator(ctx context.Context, eventID uuid.UUID) (*dto.EventResponse, error) {
+	if eventID == uuid.Nil {
+		return nil, domainErr.New(domainErr.ErrBadRequest, "event id is required", nil)
+	}
+	lifecycle, ok := uc.eventRepo.(repository.LifecycleRepository)
+	if !ok {
+		return nil, domainErr.New(domainErr.ErrInternal, "event lifecycle service is not configured", nil)
+	}
+	event, err := lifecycle.Cancel(ctx, eventID, uc.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return &dto.EventResponse{Data: MapEvent(event, uc.now().UTC())}, nil
+}
+
 func (uc *EventUseCase) validateAssociations(ctx context.Context, organizerID uuid.UUID, req dto.CreateEventRequest) error {
 	if req.PlaceID != nil {
 		if uc.placeRepo == nil {

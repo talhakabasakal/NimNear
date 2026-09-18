@@ -31,11 +31,13 @@ func (r *ProfileRepo) GetPublic(ctx context.Context, id uuid.UUID) (*model.Publi
 			COALESCE(
 				NULLIF(BTRIM(u.display_name), ''),
 				NULLIF(CONCAT_WS(' ', NULLIF(BTRIM(u.first_name), ''), NULLIF(BTRIM(u.last_name), '')), ''),
+				i.address,
 				''
 			),
 			u.username,
 			u.bio,
 			u.avatar_url,
+			COALESCE(i.address, ''),
 			u.created_at,
 			(
 				SELECT COUNT(*)::int
@@ -46,13 +48,16 @@ func (r *ProfileRepo) GetPublic(ctx context.Context, id uuid.UUID) (*model.Publi
 			),
 			(
 				SELECT COUNT(*)::int
-				FROM event_participants ep
-				JOIN events e ON e.id = ep.event_id
-				WHERE ep.user_id = u.id
-				  AND e.is_public = TRUE
-				  AND e.status = 'published'
+				FROM (
+					SELECT ep.event_id FROM event_participants ep WHERE ep.user_id = u.id
+					UNION
+					SELECT ep.event_id FROM event_purchases ep WHERE ep.user_id = u.id AND ep.status = 'confirmed'
+				) attended_events
+				JOIN events e ON e.id = attended_events.event_id
+				WHERE e.is_public = TRUE AND e.status = 'published'
 			)
 		FROM users u
+		LEFT JOIN user_nimiq_identities i ON i.user_id = u.id AND i.revoked_at IS NULL
 		WHERE u.id = $1 AND u.status = 'active'`, id,
 	).Scan(
 		&profile.ID,
@@ -60,6 +65,7 @@ func (r *ProfileRepo) GetPublic(ctx context.Context, id uuid.UUID) (*model.Publi
 		&profile.Username,
 		&profile.Bio,
 		&profile.AvatarURL,
+		&profile.WalletAddress,
 		&profile.JoinedAt,
 		&profile.OrganizedEventCount,
 		&profile.AttendedEventCount,

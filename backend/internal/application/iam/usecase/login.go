@@ -45,13 +45,6 @@ func (uc *LoginUseCase) Execute(ctx context.Context, req dto.LoginRequest) (*dto
 
 	return &dto.LoginResponse{
 		Token: token,
-		User: dto.UserInfo{
-			ID:        user.ID,
-			Email:     user.Email,
-			FirstName: user.FirstName,
-			LastName:  user.LastName,
-			Status:    string(user.Status),
-			CreatedAt: user.CreatedAt,
-		},
+		User:  dto.ToUserInfo(user, ""),
 	}, nil
 }

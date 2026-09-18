@@ -9,23 +9,23 @@ This document records where every user-facing dynamic value comes from and defin
 - A successful response with an empty collection renders an empty state distinct from an error.
 - Loading skeletons, navigation labels, form labels/examples, design tokens, icon choices, neutral avatar/image fallbacks, and explicitly labeled editorial taxonomy are interface content, not application records.
 - Test fixtures are allowed only in test files and isolated test databases. They must not be imported by runtime packages or normal startup.
-- No NIMNear product seed runs during server startup, migrations, `dev.sh`, or Docker Compose startup.
+No NIMNear product seed runs during server startup, migrations, `dev.sh`, or Docker Compose startup. `make seed-dev-places` is an explicit development-only operator command that inserts fictional places.
 
 ## Route provenance
 
-### `/` — Keşfet
+### `/` — Discover
 
 Dynamic data: `GET /api/v1/events?limit=4` through `fetchEvents`. Event count and event-card title, date, location, price, capacity-derived status, organizer ID, and media URL all originate in the API response.
 
-Static interface content: hero copy; category names and colors; navigation; and neutral calendar empty/error copy. Categories are a local taxonomy, not event records. Nearby place cards are not rendered until the user explicitly chooses `Konumumu kullan`; successful cards come from `GET /api/v1/places/nearby` and link to stable `/places/{id}` routes. Istanbul, Kadıköy, Galata, and Karaköy are no longer runtime place records or location fallbacks.
+Static interface content: hero copy; navigation; and neutral calendar empty/error copy. Decorative homepage category cards were removed because they implied discovery that is not implemented. Nearby place cards are not rendered until the user explicitly chooses `Use my location`; successful cards come from `GET /api/v1/places/nearby` and link to stable `/places/{id}` routes. Istanbul, Kadıköy, Galata, and Karaköy are no longer runtime place records or location fallbacks.
 
 Loading: route-level skeleton in `app/loading.tsx`.
 
-Empty: `EventList` renders `Henüz etkinlik yok` only after a successful empty response.
+Empty: `EventList` renders `No events yet` only after a successful empty response.
 
 Error: a failed events request passes an explicit error marker to `EventList`; no event records are rendered. The hero reports that the event service is unavailable rather than showing a fabricated count.
 
-The homepage calendar preview and `/calendars` surface use `GET /api/v1/calendars`; calendar cards and detail data are backend-derived. The homepage section is `Yaklaşan etkinlikler`: it displays chronological upcoming API records, not a popularity ranking.
+The homepage calendar preview and `/calendars` surface use `GET /api/v1/calendars`; calendar cards and detail data are backend-derived. The homepage section is `Upcoming events`: it displays chronological upcoming API records, not a popularity ranking.
 
 Location behavior: the homepage requests browser geolocation only after an explicit user action. Permission denied, unsupported browser/WebView, timeout, backend error, and no-nearby-place results are distinct states. No precise location is persisted, and unavailable location never claims Istanbul or another city.
 
@@ -37,7 +37,7 @@ Static interface content: headings, onboarding copy, labels, neutral missing-med
 
 Loading: route-level calendar skeletons and a client workspace skeleton.
 
-Empty/not found: public empty arrays render `Henüz herkese açık takvim yok`; owned/followed empty arrays render `Henüz takvim yok`; an unknown/private public calendar maps to not-found.
+Empty/not found: public empty arrays render `No public calendars yet`; owned/followed empty arrays render `No calendars yet`; an unknown/private public calendar maps to not-found.
 
 Error: public, detail, and authenticated workspace failures render explicit error states. No stale or static calendar list is used. Native Nimiq connection without a backend JWT is presented as blocked for ownership/follow mutations.
 
@@ -49,7 +49,7 @@ Static interface content: page title and time-filter labels. The page has no imp
 
 Loading: route-level event-list skeleton.
 
-Empty: `EventTimeline` renders `Bu dönemde etkinlik yok` only for a successful empty result.
+Empty: `EventTimeline` renders `No events during this period` only for a successful empty result.
 
 Error: `EventTimeline` renders an explicit service error before evaluating collection emptiness. No static event list is substituted.
 
@@ -77,7 +77,7 @@ Loading: route-level detail skeleton plus component-level participation and purc
 
 Empty/not found: an event API 404 maps to the route not-found screen.
 
-Error: event API failures render `Etkinlik yüklenemedi`. Organizer API failure is shown independently as `Organizatör bilgisi yüklenemedi`; it is not silently replaced with a person. Participation, purchase restore, and event-creation auth checks distinguish a 401 from service failure. Non-auth failures render retryable errors and do not expose anonymous, ready-to-buy, or other fabricated states. Purchase polling retains the last backend purchase state and displays polling errors while retrying. The backend reconciliation worker may move submitted/verifying purchases to confirmed, failed, or expired from authoritative verification; no frontend fallback creates a payment result.
+Error: event API failures render `Event could not be loaded`. Organizer API failure is shown independently as `Organizer information could not be loaded`; it is not silently replaced with a person. Participation, purchase restore, and event-creation auth checks distinguish a 401 from service failure. Non-auth failures render retryable errors and do not expose anonymous, ready-to-buy, or other fabricated states. Purchase polling retains the last backend purchase state and displays polling errors while retrying. The backend reconciliation worker may move submitted/verifying purchases to confirmed, failed, or expired from authoritative verification; no frontend fallback creates a payment result.
 
 Dependency: protected participation and purchase actions still depend on a legacy backend JWT. Native Nimiq account permission does not create that JWT; the verified Nimiq authentication bridge remains externally blocked.
 
@@ -121,19 +121,19 @@ Empty: empty event histories are explicit successful states.
 
 Error/not found: profile 404 maps to not-found; other profile or history failures render an error. No person or history is fabricated.
 
-### `/profile/edit`
+### `/profile` account actions
 
-Dynamic data: `GET /api/v1/profiles/{current-user-id}` initializes editable values; `PATCH /api/v1/me/profile` persists display name, username, and bio.
+Authenticated self-profile editing is inline on `/profile`. `PATCH /api/v1/me/profile` persists display name, username, and bio. Logout uses `POST /api/v1/auth/logout`. Account deletion uses `DELETE /api/v1/me` after an explicit confirmation dialog. The unused `/profile/edit` route was removed.
 
-Static interface content: field labels, validation guidance, neutral avatar fallback, and username example placeholder.
+Static interface content: field labels, validation guidance, deletion warning copy, and username example placeholder.
 
-Loading: profile-form skeleton and submit pending state.
+Loading: profile-form skeleton, submit pending state, and deletion pending state.
 
 Empty: optional username and bio may legitimately be empty; they are not fallback records.
 
-Error: profile load and mutation failures are explicit. The form never substitutes a static profile.
+Error: profile load, mutation, logout, and deletion failures are explicit. The form never substitutes a static profile.
 
-Dependency: current-user ID and mutation authorization remain coupled to the legacy JWT session until verified Nimiq authentication is available.
+Dependency: current-user ID and mutation authorization use the Nimiq session cookie.
 
 ## Backend and tooling boundaries
 
@@ -145,7 +145,7 @@ A configured gateway endpoint without a usable backend now fails closed with HTT
 
 ### Migrations and normal startup
 
-Repository migrations define schema and required authorization metadata; they contain no inserts for events, places, profiles, event participants, purchases, tickets, or calendars. Server startup, `dev.sh`, and Docker Compose do not invoke the manual seed command.
+Repository migrations define schema and required authorization metadata; they contain no inserts for events, places, profiles, event participants, purchases, tickets, or calendars. Server startup, `dev.sh`, and Docker Compose do not invoke the manual seed command. `make seed-dev-places` is an explicit development-only fictional place inventory command and refuses production.
 
 ### Manual RBAC bootstrap
 
@@ -165,7 +165,7 @@ The following are intentionally retained and are not represented as live records
 
 - homepage category taxonomy;
 - input examples and neutral media/avatar fallbacks;
-- the chronological event feed under the truthful `Yaklaşan etkinlikler` label;
+- the chronological event feed under the truthful `Upcoming events` label;
 - explicit location instructions and neutral unavailable-location copy.
 
 None of these surfaces supplies fake event, profile, attendee, payment, ticket, or location API records.

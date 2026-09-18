@@ -85,9 +85,11 @@ Local secrets belong in ignored environment files.
 
 - `development`: documented local defaults remain available, including the local PostgreSQL credentials and development JWT defaults.
 - `test`: tests may use isolated explicit fixtures and do not depend on production secrets.
-- `production`: startup fails before infrastructure initialization if JWT secret/issuer, database host/user/password/name, TLS mode, or CORS origins are missing or still using known development defaults. Empty or wildcard CORS origins are rejected. Database connection failure also stops production startup; it does not downgrade to an in-memory/no-database mode.
+- `production`: startup fails before infrastructure initialization if JWT secret/issuer, database host/user/password/name, TLS mode, CORS origins, Redis host, or canonical `NIMNEAR_PUBLIC_ORIGIN` are missing or still using known development defaults. Empty or wildcard CORS origins are rejected. Public metrics, email auth, and the legacy platform API are rejected. Database or Redis connection failure also stops production startup. Merchant addresses are checksum-validated when payments are enabled. WebSocket empty Origin is rejected unless `WS_ALLOW_EMPTY_ORIGIN=true`.
 
-Payment configuration remains optional as before. When enabled in production, the existing `NIMNEAR_NIMIQ_NETWORK`, `NIMNEAR_MERCHANT_ADDRESS`, and `NIMNEAR_NIMIQ_RPC_URL` settings must be complete, must identify the production main network, and must not use local or obvious test-network RPC URLs. This is an environment-safety check only; payment routing is unchanged.
+Payment configuration remains optional as before. When Nimiq payments are enabled, `NIMNEAR_AUTH_NETWORK` and `NIMNEAR_NIMIQ_NETWORK` must refer to the same Albatross environment (`test-albatross` / `TestAlbatross`, or `main-albatross` / `MainAlbatross`). Mismatched or unknown networks fail startup and are not rewritten. Production additionally requires MainAlbatross for both auth and enabled payments, a checksum-valid `NIMNEAR_MERCHANT_ADDRESS`, and `NIMNEAR_NIMIQ_RPC_URL` must be complete and must not use local or obvious test-network RPC URLs.
+
+Cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests reuse `CORS_ALLOWED_ORIGINS`. A browser `Origin` must be on that allowlist; if `Origin` is absent the `Referer` origin is checked. Cookie mutations with neither header are rejected (`request_origin_forbidden`). Explicit `Authorization: Bearer` API clients are not origin-checked. Production may keep `SameSite=None` when the Vercel frontend and API are cross-site; origin validation is the CSRF control for those cookies. WebSocket `GET /api/v1/ws` is not part of this HTTP mutation check.
 
 Validation errors contain configuration variable names and remediation guidance, never secret values or full connection strings.
 
@@ -116,6 +118,10 @@ go vet ./...
 When relevant:
 - `GET /health/live`
 - `GET /health/ready`
+
+Nimiq RPC outage does not fail `/health/ready`. Core app traffic may stay in rotation while payment operations fail closed.
+
+Content-Security-Policy is deferred on the API as well. Baseline security headers are applied globally.
 
 Add regression tests for infrastructure bugs when practical.
 
@@ -157,7 +163,7 @@ GET /api/v1/events/{id} returns one public, published event or 404.
 
 The calendar domain is backed by migrations `00021_create_calendars.sql` and `00022_add_event_calendar.sql`. `GET /api/v1/calendars` returns only active, public calendars in deterministic `created_at ASC, id ASC` order. `GET /api/v1/calendars/{id}` returns one active public calendar and its published, public events in chronological `starts_at ASC, id ASC` order. Empty collections are returned as empty arrays; no calendar seed data is created.
 
-Calendar ownership and follows are protected by the existing JWT middleware. `GET /api/v1/me/calendars` returns the authenticated user’s owned and followed calendars. `POST /api/v1/calendars`, `POST /api/v1/calendars/{id}/follow`, and `DELETE /api/v1/calendars/{id}/follow` require the legacy backend JWT. Follow insertion is idempotent and unfollow is safely repeatable. Private and archived calendars are excluded from public reads.
+Calendar ownership and follows are protected by the existing JWT middleware. `GET /api/v1/me/calendars` returns the authenticated user’s owned and followed calendars, including archived owned calendars. `POST /api/v1/calendars`, `PATCH /api/v1/calendars/{id}`, `POST /api/v1/calendars/{id}/archive`, `POST /api/v1/calendars/{id}/follow`, and `DELETE /api/v1/calendars/{id}/follow` require the authenticated session cookie or Bearer JWT. Update and archive are owner-only; followers cannot edit. Follow insertion is idempotent and unfollow is safely repeatable. Private and archived calendars are excluded from public reads. Archived calendars cannot receive new events. Existing events keep their `calendar_id`.
 
 Calendar DTOs expose stable IDs, name, visibility, timestamps, and optional description/image fields as explicit JSON `null` when absent. Owner IDs and follower data are not exposed through public calendar reads. Nimiq `listAccounts()` does not authorize calendar mutations; native Nimiq authentication remains blocked pending the verified signature-to-JWT contract.
 
@@ -167,7 +173,9 @@ Calendar DTOs expose stable IDs, name, visibility, timestamps, and optional desc
 
 `GET /api/v1/places/{id}` returns one active place by its stable UUID or 404. The public DTO contains only place identity, description, coordinates, address, category, and image URL; inactive places are not exposed.
 
-Public event discovery accepts `place_id` and applies that filter in PostgreSQL before chronological ordering. The frontend does not fetch all events and filter them locally. No city taxonomy or place seed data is created by migrations or startup; city-level aggregation remains unsupported until a product decision defines it.
+Places are operator-managed. There is no public create/edit API. Operators use `cmd/manage-place` and may load fictional development inventory with `make seed-dev-places`. See `PLACES_OPERATIONS.md` and `PRODUCT_BOUNDARIES.md`.
+
+Public event discovery accepts `place_id` and applies that filter in PostgreSQL before chronological ordering. The frontend does not fetch all events and filter them locally. No city taxonomy is created by migrations or startup. Development place inventory is an explicit operator/seed command, never an automatic migration insert.
 
 ### Event creation
 
@@ -239,15 +247,48 @@ The paid-event flow stops at a confirmed purchase. It does not issue tickets or 
 - GET /api/v1/purchases/{id}/payment-instructions returns only backend-authoritative purchase_id, recipient, amount_lunas, network, and hold expiry.
 - POST /api/v1/purchases/{id}/transaction accepts only a transaction_hash. Hashes are normalized, format-checked, and unique at the database level.
 - Purchase states are pending, submitted, verifying, confirmed, failed, expired, and cancelled. Hash submission is never trusted by itself; the server verifier may confirm immediately only when the transfer is already valid and final.
-- Verification uses getTransactionByHash, then getBlockByNumber for the containing block and getBatchNumber for finality. Recipient, exact Luna amount, network, basic-transfer fields, execution result, inclusion, and finality are server-checked.
+- Verification uses getTransactionByHash, then getBlockByNumber for the containing block and getBatchNumber for finality. Sender must match a verified Nimiq identity of the authenticated purchaser. Recipient, exact Luna amount, network, basic-transfer fields, execution result, inclusion, and finality are server-checked.
 - A transaction in a micro block remains submitted/verifying until its batch has been followed by a later batch, which is the macro-block finality rule used here.
 - The frontend uses @nimiq/mini-app-sdk and sendBasicTransaction only after retrieving payment instructions. The wallet owns user confirmation and private keys; NIMNear never receives or stores private keys.
 - The frontend polls the owner-scoped purchase state during verification and can recover it by reopening the event. A server-side reconciliation worker also runs when payment verification is enabled; it processes a bounded deterministic batch on a configurable interval and exits cleanly with the server.
-- Once a hash is accepted, the capacity hold is pinned by clearing its expiry and counting submitted/verifying purchases as active. An invalid verified transaction moves to failed and releases capacity. A temporary RPC outage, propagation delay, or not-found response does not fail or confirm a purchase before the deadline. At the configured reconciliation deadline, the worker performs one authoritative verifier attempt: a valid finalized transfer becomes confirmed, a conclusively invalid transfer becomes failed, and an unresolved result becomes expired. Expired unresolved payments release capacity and are never silently confirmed later; refunds are not implemented.
+- Once a hash is accepted, the capacity hold is pinned by clearing its expiry and counting submitted/verifying purchases as active. An invalid verified transaction moves to failed and releases capacity. A temporary RPC outage, propagation delay, or not-found response does not fail or confirm a purchase before the deadline. At the configured reconciliation deadline, the worker performs one authoritative verifier attempt: a valid finalized transfer becomes confirmed, a conclusively invalid transfer becomes failed, and an unresolved result becomes expired. Expired unresolved payments release capacity and are not silently confirmed later. The only exception is explicit expired-but-paid recovery: an expired purchase that already has a reserved hash may move `expired → confirmed` after the same full verifier succeeds. Refunds are not implemented.
+- Paid EventPurchase creation and hash submission fail closed with `payment_not_configured` when the Nimiq verifier is unavailable. They do not persist a hash, consume a transaction, or clear the capacity hold. Create also requires at least one verified Nimiq identity from the authoritative identity repository.
+- EventPurchase create and transaction submit are Redis-rate-limited per authenticated user (`NIMNEAR_PURCHASE_CREATE_LIMIT`, `NIMNEAR_PURCHASE_SUBMIT_LIMIT`). Exceeding the limit returns HTTP 429 with the existing JSON error envelope and does not mutate the database.
+- `POST /api/v1/purchases/{id}/reverify` is owner-authenticated recovery. Operators can also run `cmd/recover-payment`. Both reuse the shared verifier and are idempotent.
 - Reconciliation uses database claim timestamps to prevent concurrent frontend reads and workers from issuing duplicate verifier attempts. Candidate selection is bounded and deterministic. The worker logs purchase/event IDs, state transitions, and outcome classifications without private credentials or wallet secrets.
 - Reconciliation settings are loaded from `NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS` (default 30), `NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES` (default 60), and `NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE` (default 50). Existing submitted/verifying rows without a dedicated deadline use their last update time plus the configured deadline as a compatibility fallback.
 - Configuration is optional in local environments and becomes active only when all three public settings are supplied: NIMNEAR_NIMIQ_NETWORK, NIMNEAR_MERCHANT_ADDRESS, and NIMNEAR_NIMIQ_RPC_URL. Partial or malformed configuration fails startup. No private key is accepted. The Mini App provider does not expose a reliable consensus-network identifier; testnet safety therefore depends on matching the configured backend RPC/network and the Nimiq Pay runtime testnet selection.
 - Tickets, QR codes, check-in, refunds, organizer payouts, notifications, and multiple tickets remain unsupported.
+
+## Payment Request domain
+
+Payment Request is a shareable “send exactly this amount of NIM to one of my verified identities” object. It does not replace EventPurchase and does not issue tickets.
+
+Lifetime is a single configuration value: `NIMNEAR_PAYMENT_REQUEST_TTL_HOURS` (default **24 hours**). `expires_at` is stored on create. Public and creator reads treat `now >= expires_at` as expired even if a worker has not persisted that status yet.
+
+### Payer policy (Phase 4A)
+
+Transaction submission requires an authenticated Nimnear session. The RPC sender must match one of the **payer’s** verified `user_nimiq_identities`. Sender is never bound to `PaymentRequest.creator_user_id`. Creator and payer are separate identities; another verified Nimnear user can pay the request. Unauthenticated payment submission is not implemented.
+
+### Statuses
+
+`pending` is the only payable state. `submitted` and `verifying` mean a hash was accepted and is waiting for the same macro-block finality rule as EventPurchase; they are not paid. `paid`, `failed`, `expired`, and `cancelled` are terminal. `paid → pending` and `cancelled → paid` are rejected. `expired → paid` is allowed only through authoritative blockchain recovery for a row that already has a reserved hash; it cannot attach a new hash.
+
+### Routes
+
+- `POST /api/v1/payment-requests` is authenticated. Input is `amount_nim` (decimal string), optional `note`, and optional `address` of a verified identity. Recipient is derived from the creator’s verified identities (most recent, or the selected owned address). Creator ID and recipient cannot be supplied by the client.
+- `GET /api/v1/payment-requests` lists the creator’s requests.
+- `GET /api/v1/payment-requests/{public_id}` is creator-scoped.
+- `POST /api/v1/payment-requests/{public_id}/cancel` cancels pending requests. Already cancelled or expired is idempotent; paid and in-flight payments return conflict.
+- `GET /api/v1/public/payment-requests/{public_id}` is public. It returns only `public_id`, recipient address, amount, note, status, `expires_at`, and network.
+- `POST /api/v1/payment-requests/{public_id}/transaction` is authenticated. The body may contain only `transaction_hash`.
+- `POST /api/v1/payment-requests/{public_id}/reverify` is authenticated for the creator or payer. It re-verifies an expired request that already has a reserved hash.
+
+Amount is stored as integer Luna. Notes are optional plain text, trimmed, at most 140 characters, with no control characters. Public IDs are UUIDv4 values, not sequential integers, emails, or wallet addresses.
+
+Verification reuses the shared Nimiq transfer primitive: existence, successful execution, configured network, exact recipient, exact Luna amount, basic transfer fields, inclusion, and macro-block finality. Replay protection uses `consumed_nimiq_transactions` so a hash cannot satisfy both an EventPurchase and a PaymentRequest. A background reconciliation worker uses the same interval/deadline/batch settings as EventPurchase.
+
+Trusted reverse proxies are configured with `NIMNEAR_TRUSTED_PROXY_CIDRS`. Empty means `X-Forwarded-For` and `X-Real-IP` are ignored. See `docs/NIMIQ_RPC.md` for the production RPC contract, `/health/ready` decision, recovery, and isolated PostgreSQL tests.
 
 ## Data bootstrap boundary
 

@@ -71,9 +71,9 @@ The MVP is expected to focus on:
 
 ## Current implementation boundary
 
-Implemented backend-backed surfaces include event discovery/detail, active-place discovery/detail, public profiles and profile editing through the legacy JWT, free RSVP, public calendars and legacy-JWT-protected calendar mutations, event creation through the legacy JWT, and paid purchase verification/reconciliation to a configured global merchant.
+Implemented backend-backed surfaces include event discovery/detail, active-place discovery/detail, operator-managed place inventory, public profiles and profile editing through the Nimiq session cookie, free RSVP, public calendars and cookie-protected calendar mutations, event creation through the Nimiq session, and paid purchase verification/reconciliation to a configured global merchant.
 
-The normal frontend account-entry UX uses Nimiq Pay listAccounts(), but this is not backend authentication. Protected operations still require the existing JWT. Native Nimiq signature authentication is NO-GO pending the unresolved official Mini App signing contract. Organizer verified recipients, organizer payouts, entitlements, tickets, QR/check-in, refunds, notifications, and city subscription/taxonomy behavior are not implemented.
+The Mini App signs in with Nimiq Pay or the Testnet Hub. That flow is backend authentication. `listAccounts()` alone is not. Legacy email/password APIs are rate-limited and disabled in production by default. The leftover MasterFabric platform/gateway is disabled in production by default. Organizer verified recipients, organizer payouts, entitlements, tickets, QR/check-in, refunds, notifications, and city subscription/taxonomy behavior are not implemented.
 
 ## Out of Scope Until Explicitly Requested
 

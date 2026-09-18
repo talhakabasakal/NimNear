@@ -7,16 +7,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/masterfabric-go/masterfabric/internal/application/eventpurchase/verification"
+	"github.com/google/uuid"
+	epverification "github.com/masterfabric-go/masterfabric/internal/application/eventpurchase/verification"
+	"github.com/masterfabric-go/masterfabric/internal/application/nimiqtx/verification"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/model"
+	nimiqnet "github.com/masterfabric-go/masterfabric/internal/shared/nimiq"
 )
 
-var ErrTransactionNotFound = errors.New("nimiq transaction not found")
+var (
+	ErrTransactionNotFound     = errors.New("nimiq transaction not found")
+	ErrRPCAuthenticationFailed = errors.New("Nimiq RPC authentication failed")
+	ErrRPCTimeout              = errors.New("Nimiq RPC request timed out")
+	ErrRPCUnavailable          = errors.New("Nimiq RPC is unavailable")
+)
+
+const (
+	DefaultTransactionLimit = 50
+	MaxTransactionLimit     = 500
+)
 
 type RPCClient interface {
 	GetTransactionByHash(ctx context.Context, hash string) (Transaction, error)
@@ -27,6 +42,7 @@ type RPCClient interface {
 type Transaction struct {
 	Hash            string
 	BlockNumber     uint64Value
+	Timestamp       uint64Value
 	From            string
 	To              string
 	FromType        uint64Value
@@ -39,6 +55,17 @@ type Transaction struct {
 	ExecutionResult *bool
 }
 
+type Account struct {
+	Address string      `json:"address"`
+	Balance uint64Value `json:"balance"`
+	Type    string      `json:"type"`
+}
+
+type TransactionQuery struct {
+	Max     int
+	StartAt string
+}
+
 type Block struct {
 	Batch   uint64Value
 	Network string
@@ -47,12 +74,24 @@ type Block struct {
 
 type Client struct {
 	endpoint   string
+	username   string
+	password   string
 	httpClient *http.Client
 }
 
 func NewClient(endpoint string) *Client {
+	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	username, password := "", ""
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.User != nil {
+		username = parsed.User.Username()
+		password, _ = parsed.User.Password()
+		parsed.User = nil
+		trimmed = strings.TrimRight(parsed.String(), "/")
+	}
 	return &Client{
-		endpoint:   strings.TrimRight(endpoint, "/"),
+		endpoint:   trimmed,
+		username:   username,
+		password:   password,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -68,6 +107,30 @@ type responseEnvelope struct {
 }
 
 func (c *Client) call(ctx context.Context, method string, params []any, target any) error {
+	started := time.Now()
+	err := c.doCall(ctx, method, params, target)
+	observeRPC(method, rpcOutcome(err), time.Since(started).Seconds())
+	return err
+}
+
+func rpcOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, ErrRPCTimeout):
+		return "timeout"
+	case errors.Is(err, ErrRPCAuthenticationFailed):
+		return "auth_failed"
+	case errors.Is(err, ErrTransactionNotFound):
+		return "not_found"
+	case errors.Is(err, ErrRPCUnavailable):
+		return "unavailable"
+	default:
+		return "error"
+	}
+}
+
+func (c *Client) doCall(ctx context.Context, method string, params []any, target any) error {
 	if c == nil || c.endpoint == "" {
 		return errors.New("Nimiq RPC URL is not configured")
 	}
@@ -85,14 +148,20 @@ func (c *Client) call(ctx context.Context, method string, params []any, target a
 		return fmt.Errorf("create Nimiq RPC request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	if c.username != "" || c.password != "" {
+		request.SetBasicAuth(c.username, c.password)
+	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("call Nimiq RPC: %w", err)
+		return classifyRPCTransportError(err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
 		return fmt.Errorf("read Nimiq RPC response: %w", err)
+	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return ErrRPCAuthenticationFailed
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("Nimiq RPC returned HTTP %d", response.StatusCode)
@@ -122,6 +191,49 @@ func (c *Client) GetTransactionByHash(ctx context.Context, hash string) (Transac
 	return tx, err
 }
 
+func (c *Client) GetAccountByAddress(ctx context.Context, address string) (Account, error) {
+	if strings.TrimSpace(address) == "" {
+		return Account{}, errors.New("Nimiq address is required")
+	}
+	var account Account
+	err := c.call(ctx, "getAccountByAddress", []any{address}, &account)
+	return account, err
+}
+
+func (c *Client) GetBalance(ctx context.Context, address string) (uint64, error) {
+	account, err := c.GetAccountByAddress(ctx, address)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(account.Balance), nil
+}
+
+func (c *Client) GetTransactionsByAddress(ctx context.Context, address string, query TransactionQuery) ([]Transaction, error) {
+	if strings.TrimSpace(address) == "" {
+		return nil, errors.New("Nimiq address is required")
+	}
+	max := query.Max
+	if max <= 0 {
+		max = DefaultTransactionLimit
+	}
+	if max > MaxTransactionLimit {
+		max = MaxTransactionLimit
+	}
+	var startAt any
+	if hash := strings.TrimSpace(query.StartAt); hash != "" {
+		startAt = hash
+	}
+	var transactions []Transaction
+	err := c.call(ctx, "getTransactionsByAddress", []any{address, max, startAt}, &transactions)
+	if err != nil {
+		return nil, err
+	}
+	if transactions == nil {
+		return []Transaction{}, nil
+	}
+	return transactions, nil
+}
+
 func (c *Client) GetBlockByNumber(ctx context.Context, number uint64) (Block, error) {
 	var block Block
 	err := c.call(ctx, "getBlockByNumber", []any{number, false}, &block)
@@ -134,27 +246,41 @@ func (c *Client) GetBatchNumber(ctx context.Context) (uint64, error) {
 	return uint64(number), err
 }
 
-// NimiqVerifier checks recipient, exact Luna amount, basic transfer semantics, network, execution,
+// NimiqVerifier checks sender, recipient, exact Luna amount, basic transfer semantics, network, execution,
 // inclusion, and macro-block finality. It intentionally does not use confirmation-count heuristics.
 type NimiqVerifier struct {
 	rpc      RPCClient
 	merchant string
 	network  string
+	senders  verification.SenderResolver
 }
 
-func NewVerifier(client RPCClient, merchant, network string) *NimiqVerifier {
+func NewVerifier(client RPCClient, merchant, network string, senders verification.SenderResolver) *NimiqVerifier {
 	return &NimiqVerifier{
 		rpc:      client,
 		merchant: normalizeAddress(merchant),
 		network:  strings.TrimSpace(network),
+		senders:  senders,
 	}
 }
 
-func (v *NimiqVerifier) Verify(ctx context.Context, purchase *model.Purchase) (verification.Outcome, error) {
-	if v == nil || v.rpc == nil || purchase == nil || purchase.TransactionHash == nil {
+func (v *NimiqVerifier) Verify(ctx context.Context, purchase *model.Purchase) (epverification.Outcome, error) {
+	if v == nil || purchase == nil || purchase.TransactionHash == nil {
+		return epverification.OutcomeNotFound, nil
+	}
+	return v.VerifyTransfer(ctx, verification.Transfer{
+		TransactionHash: *purchase.TransactionHash,
+		Recipient:       v.merchant,
+		AmountLunas:     purchase.AmountLunas,
+		PayerUserID:     purchase.UserID,
+	})
+}
+
+func (v *NimiqVerifier) VerifyTransfer(ctx context.Context, transfer verification.Transfer) (verification.Outcome, error) {
+	if v == nil || v.rpc == nil || strings.TrimSpace(transfer.TransactionHash) == "" {
 		return verification.OutcomeNotFound, nil
 	}
-	tx, err := v.rpc.GetTransactionByHash(ctx, *purchase.TransactionHash)
+	tx, err := v.rpc.GetTransactionByHash(ctx, transfer.TransactionHash)
 	if errors.Is(err, ErrTransactionNotFound) {
 		return verification.OutcomeNotFound, nil
 	}
@@ -162,18 +288,23 @@ func (v *NimiqVerifier) Verify(ctx context.Context, purchase *model.Purchase) (v
 		return verification.OutcomeNotFound, err
 	}
 
-	if tx.Hash != "" && !strings.EqualFold(tx.Hash, *purchase.TransactionHash) {
+	if tx.Hash != "" && !strings.EqualFold(tx.Hash, transfer.TransactionHash) {
 		return verification.OutcomeInvalid, nil
 	}
-	if normalizeAddress(tx.To) != v.merchant ||
-		purchase.AmountLunas <= 0 ||
-		uint64(purchase.AmountLunas) != uint64(tx.Value) ||
+	matched, err := senderMatchesVerifiedIdentity(ctx, v.senders, transfer.PayerUserID, tx.From)
+	if err != nil {
+		return verification.OutcomeNotFound, err
+	}
+	if !matched ||
+		normalizeAddress(tx.To) != normalizeAddress(transfer.Recipient) ||
+		transfer.AmountLunas <= 0 ||
+		uint64(transfer.AmountLunas) != uint64(tx.Value) ||
 		tx.FromType != 0 ||
 		tx.ToType != 0 ||
 		tx.Flags != 0 ||
 		strings.TrimSpace(tx.SenderData) != "" ||
 		strings.TrimSpace(tx.RecipientData) != "" ||
-		tx.NetworkID == 0 ||
+		!networkIDMatches(v.network, uint64(tx.NetworkID)) ||
 		tx.BlockNumber == 0 ||
 		tx.ExecutionResult == nil ||
 		!*tx.ExecutionResult {
@@ -198,6 +329,50 @@ func (v *NimiqVerifier) Verify(ctx context.Context, purchase *model.Purchase) (v
 	return verification.OutcomeConfirmed, nil
 }
 
+func senderMatchesVerifiedIdentity(ctx context.Context, resolver verification.SenderResolver, userID uuid.UUID, from string) (bool, error) {
+	if resolver == nil || userID == uuid.Nil {
+		return false, nil
+	}
+	addresses, err := resolver.VerifiedAddresses(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if len(addresses) == 0 {
+		return false, nil
+	}
+	sender := normalizeAddress(from)
+	if sender == "" {
+		return false, nil
+	}
+	for _, address := range addresses {
+		if normalizeAddress(address) == sender {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// networkIDMatches enforces the configured consensus network against the RPC
+// transaction network id when that id is a known Albatross identifier.
+func networkIDMatches(network string, id uint64) bool {
+	if id == 0 {
+		return false
+	}
+	expected, known := expectedNetworkID(network)
+	if !known {
+		return true
+	}
+	return id == expected
+}
+
+func expectedNetworkID(network string) (uint64, bool) {
+	parsed, err := nimiqnet.ParseNetwork(network)
+	if err != nil {
+		return 0, false
+	}
+	return parsed.ID, true
+}
+
 func normalizeAddress(address string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(address), " ", ""))
 }
@@ -217,4 +392,33 @@ func (v *uint64Value) UnmarshalJSON(data []byte) error {
 	}
 	*v = uint64Value(parsed)
 	return nil
+}
+
+func NetworkNameForID(id uint64) string {
+	switch id {
+	case nimiqnet.NetworkIDMain:
+		return nimiqnet.ConsensusMain
+	case nimiqnet.NetworkIDTest:
+		return nimiqnet.ConsensusTest
+	default:
+		return ""
+	}
+}
+
+func classifyRPCTransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return ErrRPCTimeout
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ErrRPCTimeout
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return ErrRPCTimeout
+	}
+	return ErrRPCUnavailable
 }

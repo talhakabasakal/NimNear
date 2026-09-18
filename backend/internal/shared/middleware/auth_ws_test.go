@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestExtractBearerToken_FromQuery(t *testing.T) {
+func TestExtractBearerToken_IgnoresQuery(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/ws?token=query-token", nil)
-	assert.Equal(t, "query-token", ExtractBearerToken(r))
+	assert.Empty(t, ExtractBearerToken(r))
 }
 
 func TestExtractBearerToken_FromHeader(t *testing.T) {
@@ -19,10 +19,10 @@ func TestExtractBearerToken_FromHeader(t *testing.T) {
 	assert.Equal(t, "header-token", ExtractBearerToken(r))
 }
 
-func TestExtractBearerToken_QueryTakesPrecedence(t *testing.T) {
+func TestExtractBearerToken_HeaderWinsOverQuery(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/ws?token=query-token", nil)
 	r.Header.Set("Authorization", "Bearer header-token")
-	assert.Equal(t, "query-token", ExtractBearerToken(r))
+	assert.Equal(t, "header-token", ExtractBearerToken(r))
 }
 
 func TestExtractBearerToken_Missing(t *testing.T) {

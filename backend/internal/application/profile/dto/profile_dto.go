@@ -16,6 +16,7 @@ type PublicProfileInfo struct {
 	Username            *string   `json:"username"`
 	Bio                 *string   `json:"bio"`
 	AvatarURL           *string   `json:"avatar_url"`
+	WalletAddress       *string   `json:"wallet_address"`
 	JoinedAt            time.Time `json:"joined_at"`
 	OrganizedEventCount int       `json:"organized_event_count"`
 	AttendedEventCount  int       `json:"attended_event_count"`

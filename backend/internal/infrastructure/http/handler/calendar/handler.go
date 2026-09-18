@@ -142,6 +142,57 @@ func (h *Handler) Unfollow(w http.ResponseWriter, r *http.Request) {
 	response.NoContent(w)
 }
 
+func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok || userID == uuid.Nil {
+		response.Error(w, domainErr.New(domainErr.ErrUnauthorized, "user is not authenticated", nil))
+		return
+	}
+	calendarID, err := parseID(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	var req dto.UpdateCalendarRequest
+	if err := validator.DecodeAndValidate(r, &req); err != nil {
+		response.Error(w, domainErr.New(domainErr.ErrBadRequest, "invalid calendar update request", nil))
+		return
+	}
+	if h.calendarUC == nil {
+		response.Error(w, domainErr.New(domainErr.ErrInternal, "calendar service is not configured", nil))
+		return
+	}
+	result, err := h.calendarUC.Update(r.Context(), userID, calendarID, req)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok || userID == uuid.Nil {
+		response.Error(w, domainErr.New(domainErr.ErrUnauthorized, "user is not authenticated", nil))
+		return
+	}
+	calendarID, err := parseID(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	if h.calendarUC == nil {
+		response.Error(w, domainErr.New(domainErr.ErrInternal, "calendar service is not configured", nil))
+		return
+	}
+	result, err := h.calendarUC.Archive(r.Context(), userID, calendarID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
 func parseID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -70,7 +71,7 @@ func (r *CalendarRepo) ListOwned(ctx context.Context, ownerID uuid.UUID) ([]*mod
 	rows, err := r.db.Query(ctx, `
 		SELECT id, name, description, image_url, owner_id, visibility, status, created_at, updated_at
 		FROM calendars
-		WHERE owner_id = $1 AND status = 'active'
+		WHERE owner_id = $1
 		ORDER BY created_at DESC, id DESC`, ownerID)
 	if err != nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to list owned calendars", err)
@@ -103,6 +104,51 @@ func (r *CalendarRepo) Create(ctx context.Context, calendar *model.Calendar) err
 		return domainErr.New(domainErr.ErrInternal, "failed to create calendar", err)
 	}
 	return nil
+}
+
+func (r *CalendarRepo) UpdateOwned(ctx context.Context, calendarID, ownerID uuid.UUID, patch model.Patch, now time.Time) (*model.Calendar, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE calendars
+		SET
+			name = CASE WHEN $3 THEN $4 ELSE name END,
+			description = CASE WHEN $5 THEN $6 ELSE description END,
+			image_url = CASE WHEN $7 THEN $8 ELSE image_url END,
+			visibility = CASE WHEN $9 THEN $10 ELSE visibility END,
+			updated_at = $11
+		WHERE id = $1 AND owner_id = $2
+		RETURNING id, name, description, image_url, owner_id, visibility, status, created_at, updated_at`,
+		calendarID, ownerID,
+		patch.NameSet, patch.Name,
+		patch.DescriptionSet, patch.Description,
+		patch.ImageURLSet, patch.ImageURL,
+		patch.VisibilitySet, patch.Visibility,
+		now,
+	)
+	calendar, err := scan(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErr.New(domainErr.ErrNotFound, "calendar not found", nil)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to update calendar", err)
+	}
+	return calendar, nil
+}
+
+func (r *CalendarRepo) ArchiveOwned(ctx context.Context, calendarID, ownerID uuid.UUID, now time.Time) (*model.Calendar, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE calendars
+		SET status = 'archived', updated_at = $3
+		WHERE id = $1 AND owner_id = $2
+		RETURNING id, name, description, image_url, owner_id, visibility, status, created_at, updated_at`,
+		calendarID, ownerID, now)
+	calendar, err := scan(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErr.New(domainErr.ErrNotFound, "calendar not found", nil)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to archive calendar", err)
+	}
+	return calendar, nil
 }
 
 func (r *CalendarRepo) Follow(ctx context.Context, calendarID, userID uuid.UUID) error {

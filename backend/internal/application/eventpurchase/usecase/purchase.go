@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +14,9 @@ import (
 	"github.com/masterfabric-go/masterfabric/internal/application/eventpurchase/verification"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/model"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/repository"
+	realtimeevent "github.com/masterfabric-go/masterfabric/internal/domain/realtime/event"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
+	"github.com/masterfabric-go/masterfabric/internal/shared/events"
 )
 
 var transactionHashPattern = regexp.MustCompile("^[0-9a-fA-F]{64}$")
@@ -48,11 +51,13 @@ func normalizeReconciliationPolicy(policy ReconciliationPolicy) ReconciliationPo
 type PurchaseUseCase struct {
 	repo           repository.PurchaseRepository
 	verifier       verification.Verifier
+	identities     IdentityResolver
 	now            func() time.Time
 	holdDuration   time.Duration
 	recipient      string
 	network        string
 	reconciliation ReconciliationPolicy
+	events         events.EventBus
 }
 
 // NewPurchaseUseCase creates the purchase use case with verification disabled when no verifier is configured.
@@ -87,6 +92,45 @@ func NewPurchaseUseCaseWithVerifierAndPolicy(repo repository.PurchaseRepository,
 	return uc
 }
 
+// WithEventBus attaches best-effort realtime publishing after committed transitions.
+func (uc *PurchaseUseCase) WithEventBus(bus events.EventBus) *PurchaseUseCase {
+	if uc != nil {
+		uc.events = bus
+	}
+	return uc
+}
+
+// IdentityResolver returns the authenticated user's verified Nimiq addresses.
+type IdentityResolver interface {
+	VerifiedAddresses(ctx context.Context, userID uuid.UUID) ([]string, error)
+}
+
+// WithIdentities attaches the authoritative Nimiq identity repository used by sender binding.
+func (uc *PurchaseUseCase) WithIdentities(identities IdentityResolver) *PurchaseUseCase {
+	if uc != nil {
+		uc.identities = identities
+	}
+	return uc
+}
+
+func (uc *PurchaseUseCase) paymentsConfigured() bool {
+	return uc != nil && uc.verifier != nil && strings.TrimSpace(uc.recipient) != "" && strings.TrimSpace(uc.network) != ""
+}
+
+func (uc *PurchaseUseCase) requireVerifiedIdentity(ctx context.Context, userID uuid.UUID) error {
+	if uc.identities == nil {
+		return domainErr.NewWithCode(domainErr.ErrNotFound, "no_verified_nimiq_identity", "no verified Nimiq identity is linked to this account", nil)
+	}
+	addresses, err := uc.identities.VerifiedAddresses(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if len(addresses) == 0 {
+		return domainErr.NewWithCode(domainErr.ErrNotFound, "no_verified_nimiq_identity", "no verified Nimiq identity is linked to this account", nil)
+	}
+	return nil
+}
+
 // Create creates or returns the authenticated user's active purchase for an event.
 // The repository derives the amount from the locked event row.
 func (uc *PurchaseUseCase) Create(ctx context.Context, eventID, userID uuid.UUID) (*dto.PurchaseResponse, error) {
@@ -95,6 +139,12 @@ func (uc *PurchaseUseCase) Create(ctx context.Context, eventID, userID uuid.UUID
 	}
 	if uc.repo == nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "purchase repository is not configured", nil)
+	}
+	if !uc.paymentsConfigured() {
+		return nil, domainErr.NewWithCode(domainErr.ErrNotImplemented, "payment_not_configured", "Nimiq payment configuration is not enabled", nil)
+	}
+	if err := uc.requireVerifiedIdentity(ctx, userID); err != nil {
+		return nil, err
 	}
 	purchase, err := uc.repo.Create(ctx, eventID, userID, uc.now().UTC(), uc.holdDuration)
 	if err != nil {
@@ -134,7 +184,7 @@ func (uc *PurchaseUseCase) PaymentInstructions(ctx context.Context, purchaseID, 
 	if err := validatePurchaseIdentity(purchaseID, userID); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(uc.recipient) == "" || strings.TrimSpace(uc.network) == "" {
+	if strings.TrimSpace(uc.recipient) == "" || strings.TrimSpace(uc.network) == "" || uc.verifier == nil {
 		return nil, domainErr.NewWithCode(domainErr.ErrNotImplemented, "payment_not_configured", "Nimiq payment configuration is not enabled", nil)
 	}
 	purchase, err := uc.repo.GetOwned(ctx, purchaseID, userID)
@@ -162,13 +212,72 @@ func (uc *PurchaseUseCase) SubmitTransaction(ctx context.Context, purchaseID, us
 	if !transactionHashPattern.MatchString(normalized) {
 		return nil, domainErr.NewWithCode(domainErr.ErrValidation, "invalid_transaction_hash", "transaction hash must be 64 hexadecimal characters", nil)
 	}
+	if !uc.paymentsConfigured() {
+		return nil, domainErr.NewWithCode(domainErr.ErrNotImplemented, "payment_not_configured", "Nimiq payment configuration is not enabled", nil)
+	}
+	if err := uc.requireVerifiedIdentity(ctx, userID); err != nil {
+		return nil, err
+	}
 	now := uc.now().UTC()
 	purchase, err := uc.repo.SubmitTransaction(ctx, purchaseID, userID, normalized, now, now.Add(uc.reconciliation.Deadline))
 	if err != nil {
 		return nil, err
 	}
+	if purchase.Status == model.StatusSubmitted {
+		uc.publishStatus(ctx, purchase)
+	}
 	purchase = uc.verifyAndPersist(ctx, purchase)
 	return &dto.PurchaseResponse{Data: mapPurchase(purchase)}, nil
+}
+
+// RecoverExpired re-verifies an expired purchase that already has a reserved hash.
+// It may become confirmed only when the same full verifier succeeds for that hash.
+func (uc *PurchaseUseCase) RecoverExpired(ctx context.Context, purchaseID, userID uuid.UUID) (*dto.PurchaseResponse, error) {
+	if err := validatePurchaseIdentity(purchaseID, userID); err != nil {
+		return nil, err
+	}
+	if uc.repo == nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "purchase repository is not configured", nil)
+	}
+	if !uc.paymentsConfigured() {
+		return nil, domainErr.NewWithCode(domainErr.ErrNotImplemented, "payment_not_configured", "Nimiq payment configuration is not enabled", nil)
+	}
+	purchase, err := uc.repo.GetOwned(ctx, purchaseID, userID)
+	if err != nil {
+		return nil, err
+	}
+	before := purchase.Status
+	if purchase.Status == model.StatusConfirmed {
+		slog.Info("payment recovery", "domain", "event_purchase", "purchase_id", purchase.ID, "event_id", purchase.EventID, "previous_status", before, "new_status", purchase.Status, "recovery_result", "already_paid")
+		return &dto.PurchaseResponse{Data: mapPurchase(purchase)}, nil
+	}
+	if purchase.Status != model.StatusExpired || purchase.TransactionHash == nil || strings.TrimSpace(*purchase.TransactionHash) == "" {
+		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_not_recoverable", "purchase is not an expired payment with a reserved transaction", nil)
+	}
+
+	outcome, verifyErr := uc.verifier.Verify(ctx, purchase)
+	if verifyErr != nil {
+		slog.Info("payment recovery", "domain", "event_purchase", "purchase_id", purchase.ID, "event_id", purchase.EventID, "previous_status", before, "new_status", purchase.Status, "recovery_result", "rpc_transient")
+		return &dto.PurchaseResponse{Data: mapPurchase(purchase)}, nil
+	}
+	if outcome != verification.OutcomeConfirmed {
+		result := string(outcome)
+		if result == "" {
+			result = "unresolved"
+		}
+		slog.Info("payment recovery", "domain", "event_purchase", "purchase_id", purchase.ID, "event_id", purchase.EventID, "previous_status", before, "new_status", purchase.Status, "recovery_result", result)
+		return &dto.PurchaseResponse{Data: mapPurchase(purchase)}, nil
+	}
+
+	updated, err := uc.repo.ConfirmExpiredRecovery(ctx, purchase.ID, purchase.UserID, uc.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if updated.Status != before {
+		uc.publishStatus(ctx, updated)
+	}
+	slog.Info("payment recovery", "domain", "event_purchase", "purchase_id", updated.ID, "event_id", updated.EventID, "previous_status", before, "new_status", updated.Status, "recovery_result", "confirmed")
+	return &dto.PurchaseResponse{Data: mapPurchase(updated)}, nil
 }
 
 func validateIDs(eventID, userID uuid.UUID) error {
@@ -305,6 +414,7 @@ func (uc *PurchaseUseCase) reconcilePurchase(ctx context.Context, purchase *mode
 }
 
 func (uc *PurchaseUseCase) persistVerificationState(ctx context.Context, purchase *model.Purchase, status model.Status, result ReconciliationResult, class reconciliationClassification) (*model.Purchase, ReconciliationResult) {
+	before := purchase.Status
 	updated, err := uc.repo.SetVerificationState(ctx, purchase.ID, purchase.UserID, status, uc.now().UTC())
 	if err != nil || updated == nil {
 		result.Class = string(classificationStateUpdateError)
@@ -312,10 +422,14 @@ func (uc *PurchaseUseCase) persistVerificationState(ctx context.Context, purchas
 	}
 	result.After = updated.Status
 	result.Class = string(class)
+	if updated.Status != before {
+		uc.publishStatus(ctx, updated)
+	}
 	return updated, result
 }
 
 func (uc *PurchaseUseCase) expireStale(ctx context.Context, purchase *model.Purchase, result ReconciliationResult, class reconciliationClassification) (*model.Purchase, ReconciliationResult) {
+	before := purchase.Status
 	updated, err := uc.repo.ExpireUnresolved(ctx, purchase.ID, purchase.UserID, uc.now().UTC(), uc.reconciliation.Deadline)
 	if err != nil || updated == nil {
 		result.Class = string(classificationStateUpdateError)
@@ -323,6 +437,9 @@ func (uc *PurchaseUseCase) expireStale(ctx context.Context, purchase *model.Purc
 	}
 	result.After = updated.Status
 	result.Class = string(class)
+	if updated.Status != before {
+		uc.publishStatus(ctx, updated)
+	}
 	return updated, result
 }
 
@@ -384,4 +501,31 @@ func formatNIM(lunas int64) string {
 		text = text[:len(text)-1]
 	}
 	return strconv.FormatInt(whole, 10) + "." + text
+}
+
+func (uc *PurchaseUseCase) publishStatus(ctx context.Context, purchase *model.Purchase) {
+	if uc == nil || uc.events == nil || purchase == nil {
+		return
+	}
+	eventType := realtimeevent.EventPurchaseEventType(string(purchase.Status))
+	if eventType == "" {
+		return
+	}
+	event := realtimeevent.StatusChanged{
+		Type:       eventType,
+		ResourceID: purchase.ID.String(),
+		Status:     string(purchase.Status),
+		UserIDs:    realtimeevent.UniqueUserIDs(purchase.UserID),
+		OccurredAt: uc.now().UTC(),
+	}
+	_ = uc.events.Publish(ctx, events.TopicPayments, event)
+	if purchase.Status == model.StatusConfirmed {
+		_ = uc.events.Publish(ctx, events.TopicPayments, realtimeevent.StatusChanged{
+			Type:       realtimeevent.TypeWalletActivityChanged,
+			ResourceID: purchase.ID.String(),
+			Status:     string(purchase.Status),
+			UserIDs:    event.UserIDs,
+			OccurredAt: event.OccurredAt,
+		})
+	}
 }

@@ -11,8 +11,8 @@ type EventCardProps = {
   compact?: boolean;
 };
 
-const dateFormatter = new Intl.DateTimeFormat("tr-TR", { day: "numeric", month: "short" });
-const timeFormatter = new Intl.DateTimeFormat("tr-TR", { hour: "2-digit", minute: "2-digit" });
+const dateFormatter = new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short" });
+const timeFormatter = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit" });
 
 
 function EventArtwork({ event, compact }: EventCardProps) {
@@ -51,8 +51,8 @@ export function EventCard({ event, compact = false }: EventCardProps) {
         </div>
 
         <div className="flex items-center justify-between border-t border-border pt-3 text-xs text-muted">
-          <span className="flex items-center gap-1.5"><Users size={14} />{event.attendee_count} katılımcı</span>
-          <span className="font-medium text-foreground">{event.is_free ? "Ücretsiz" : formatNimPrice(event.price_nim) + " " + event.currency}</span>
+          <span className="flex items-center gap-1.5"><Users size={14} />{event.attendee_count} attendees</span>
+          <span className="font-medium text-foreground">{event.is_free ? "Free" : formatNimPrice(event.price_nim) + " " + event.currency}</span>
         </div>
       </div>
       </article>

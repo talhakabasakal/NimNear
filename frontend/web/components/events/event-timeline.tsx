@@ -10,12 +10,12 @@ type EventTimelineProps = {
   error?: string;
 };
 
-const dateFormatter = new Intl.DateTimeFormat("tr-TR", { weekday: "long", day: "numeric", month: "long" });
+const dateFormatter = new Intl.DateTimeFormat("en-US", { weekday: "long", day: "numeric", month: "long" });
 
 export function EventTimeline({ events, error }: EventTimelineProps) {
   const state = resolveCollectionState(events, error);
-  if (state.kind === "error") return <StateCard kind="error" title="Etkinlikler yüklenemedi" description="Etkinlik servisine şu anda ulaşılamıyor." />;
-  if (state.kind === "empty") return <StateCard kind="empty" title="Bu dönemde etkinlik yok" description="Başka bir zaman aralığı seçerek tekrar deneyebilirsin." />;
+  if (state.kind === "error") return <StateCard kind="error" title="Events could not be loaded" description="The event service is currently unavailable." />;
+  if (state.kind === "empty") return <StateCard kind="empty" title="No events during this period" description="Try again by selecting a different time range." />;
 
   const groups = state.records.reduce<Record<string, EventRecord[]>>((result, event) => {
     const key = new Date(event.starts_at).toISOString().slice(0, 10);

@@ -1,16 +1,15 @@
 # NIMNear Nimiq Authentication Contract Investigation
 
-Status: investigation only. No application code, migration, payment logic, or
-frontend UX was changed for this document.
+Status: **implemented for Testnet** (2026-09-17).
 
-Verdict: **NO-GO for implementation**.
+The repository now implements the wallet-bound, single-use `AUTH_LOGIN`
+challenge for both Nimiq Pay Mini Apps and the public Nimiq Testnet Hub. The
+older investigation below is retained as design history. Its `NO-GO` verdict
+was superseded by the current official Mini App provider surface, the installed
+SDK types, the official Hub signed-message contract, and integration tests.
 
-The official Mini App API establishes the shape of `sign()` and the official
-Nimiq core establishes the Ed25519 and address primitives. The available
-authoritative material does not establish the Mini App provider's exact signed
-byte transformation, nor the signer-selection behavior when more than one
-account is approved. Implementing backend verification now would require a
-cryptographic or account-selection assumption.
+The executable contract and deployment settings are summarized in
+`NIMIQ_AUTH_IMPLEMENTATION.md`.
 
 ## Sources inspected
 

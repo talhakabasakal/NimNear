@@ -58,12 +58,6 @@ func (uc *RegisterUseCase) Execute(ctx context.Context, req dto.RegisterRequest)
 		Timestamp: time.Now().UTC(),
 	})
 
-	return &dto.UserInfo{
-		ID:        user.ID,
-		Email:     user.Email,
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
-		Status:    string(user.Status),
-		CreatedAt: user.CreatedAt,
-	}, nil
+	info := dto.ToUserInfo(user, "")
+	return &info, nil
 }

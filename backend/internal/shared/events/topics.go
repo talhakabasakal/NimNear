@@ -15,6 +15,9 @@ const (
 
 	// Audit events (consumers write to audit log)
 	TopicAudit = "masterfabric.audit"
+
+	// Payment domain events (PaymentRequest, EventPurchase, wallet activity hints)
+	TopicPayments = "nimnear.payments"
 )
 
 // Event type constants used in Envelope.Type for routing / filtering.

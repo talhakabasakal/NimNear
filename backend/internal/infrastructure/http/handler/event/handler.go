@@ -1,6 +1,8 @@
 package event
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -86,6 +88,61 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Created(w, result)
+}
+
+// Update edits only fields accepted by the organizer lifecycle contract.
+func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	organizerID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		response.Error(w, domainErr.New(domainErr.ErrUnauthorized, "user not authenticated", nil))
+		return
+	}
+	eventID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, domainErr.New(domainErr.ErrBadRequest, "invalid event id", nil))
+		return
+	}
+	if h.eventUC == nil {
+		response.Error(w, domainErr.New(domainErr.ErrInternal, "event service is not configured", nil))
+		return
+	}
+	var req dto.UpdateEventRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		response.Error(w, domainErr.New(domainErr.ErrBadRequest, "invalid event update request", nil))
+		return
+	}
+	result, err := h.eventUC.Update(r.Context(), organizerID, eventID, req)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
+// Cancel changes the event lifecycle state without deleting the event.
+func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request) {
+	organizerID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		response.Error(w, domainErr.New(domainErr.ErrUnauthorized, "user not authenticated", nil))
+		return
+	}
+	eventID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, domainErr.New(domainErr.ErrBadRequest, "invalid event id", nil))
+		return
+	}
+	if h.eventUC == nil {
+		response.Error(w, domainErr.New(domainErr.ErrInternal, "event service is not configured", nil))
+		return
+	}
+	result, err := h.eventUC.Cancel(r.Context(), organizerID, eventID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
 }
 
 func parseListQuery(r *http.Request) (dto.ListEventsQuery, error) {

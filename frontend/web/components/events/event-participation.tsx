@@ -8,6 +8,7 @@ import {
   AuthApiError,
   clearAuthSession,
   fetchCurrentUser,
+  isLostSessionStatus,
   readAuthSession,
   type AuthSession,
   writeAuthSession,
@@ -70,8 +71,8 @@ export function EventParticipation({
     let active = true;
     async function restore() {
       try {
-        const user = await fetchCurrentUser(storedSession.token);
-        const nextParticipation = await fetchParticipation(eventId, storedSession.token);
+        const user = await fetchCurrentUser();
+        const nextParticipation = await fetchParticipation(eventId);
         if (!active) return;
         const refreshed = { ...storedSession, user };
         writeAuthSession(refreshed);
@@ -82,16 +83,16 @@ export function EventParticipation({
       } catch (requestError) {
         if (!active) return;
         const isUnauthorized =
-          (requestError instanceof AuthApiError && requestError.status === 401)
+          (requestError instanceof AuthApiError && isLostSessionStatus(requestError.status))
           || (requestError instanceof ParticipationApiError && requestError.status === 401);
         if (isUnauthorized) {
           clearAuthSession();
           setSession(null);
           setStatus("anonymous");
-          setError("Oturumun sona ermiş. Nimiq imzası ile backend oturumu yenileme desteği bekleniyor.");
+          setError("Your session has expired. Sign in again with your Nimiq wallet.");
           return;
         }
-        setError(requestError instanceof Error ? requestError.message : "Katılım durumu alınamadı.");
+        setError(requestError instanceof Error ? requestError.message : "Attendance status could not be retrieved.");
         setStatus("error");
       }
     }
@@ -108,26 +109,26 @@ export function EventParticipation({
   }
 
   if (status === "checking") {
-    return <div className="h-32 animate-pulse rounded-xl border border-border bg-surface" aria-label="Katılım durumu kontrol ediliyor" />;
+    return <div className="h-32 animate-pulse rounded-xl border border-border bg-surface" aria-label="Checking attendance status" />;
   }
 
   if (status === "error") {
     return (
       <section className="rounded-xl border border-red-300/20 bg-red-400/10 p-5">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-red-200">Katılım</p>
-        <p className="mt-2 text-sm font-medium text-foreground">Katılım durumu yüklenemedi.</p>
-        <p className="mt-1 text-xs leading-5 text-muted">{error ?? "Etkinlik servisine şu anda ulaşılamıyor."}</p>
-        <Button type="button" variant="outline" className="mt-4 w-full" onClick={() => { setError(null); setStatus("checking"); setRetryKey((value) => value + 1); }}>Tekrar dene</Button>
+        <p className="text-xs font-medium uppercase tracking-[0.16em] text-red-200">Attendance</p>
+        <p className="mt-2 text-sm font-medium text-foreground">Attendance status could not be loaded.</p>
+        <p className="mt-1 text-xs leading-5 text-muted">{error ?? "The event service is currently unavailable."}</p>
+        <Button type="button" variant="outline" className="mt-4 w-full" onClick={() => { setError(null); setStatus("checking"); setRetryKey((value) => value + 1); }}>Try again</Button>
       </section>
     );
   }
 
   if (status === "anonymous") {
     if (participation.is_sold_out) {
-      return <Button type="button" variant="outline" disabled className="w-full">Tükendi</Button>;
+      return <Button type="button" variant="outline" disabled className="w-full">Sold out</Button>;
     }
     return (
-      <NimiqConnect description="Nimiq Pay hesabını bağlayabilirsin. Bu bağlantı henüz NIMNear katılım oturumu oluşturmaz." blockedMessage="Katılım için Nimiq imzası ile backend oturumu oluşturma desteği bekleniyor." />
+      <NimiqConnect description="Sign in with your Nimiq wallet to attend the event." />
     );
   }
 
@@ -137,8 +138,8 @@ export function EventParticipation({
     setError(null);
     try {
       const nextParticipation = participation.attending
-        ? await cancelParticipation(eventId, session.token)
-        : await createParticipation(eventId, session.token);
+        ? await cancelParticipation(eventId)
+        : await createParticipation(eventId);
       setParticipation(nextParticipation);
       onStateChange?.(nextParticipation);
     } catch (requestError) {
@@ -146,9 +147,9 @@ export function EventParticipation({
         clearAuthSession();
         setSession(null);
         setStatus("anonymous");
-        setError("Oturumun sona ermiş. Nimiq imzası ile backend oturumu yenileme desteği bekleniyor.");
+        setError("Your session has expired. Sign in again with your Nimiq wallet.");
       } else {
-        setError(requestError instanceof ParticipationApiError ? requestError.message : "Katılım işlemi tamamlanamadı.");
+        setError(requestError instanceof ParticipationApiError ? requestError.message : "Attendance action could not be completed.");
       }
     } finally {
       setPending(false);
@@ -157,17 +158,17 @@ export function EventParticipation({
 
   const canJoin = !participation.is_sold_out || participation.attending;
   const attendanceLabel = capacity === null
-    ? "Kontenjan sınırsız."
-    : participation.attendee_count + " / " + capacity + " kişi katılıyor.";
+    ? "Unlimited capacity."
+    : participation.attendee_count + " / " + capacity + " people are attending.";
 
   return (
     <section className="rounded-xl border border-border bg-surface p-5">
-      <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Katılım</p>
+      <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Attendance</p>
       <p className="mt-2 text-sm leading-6 text-muted">
-        {participation.attending ? "Bu etkinliğe katılıyorsun." : attendanceLabel}
+        {participation.attending ? "You are attending this event." : attendanceLabel}
       </p>
       <Button type="button" variant={participation.attending ? "outline" : "default"} disabled={pending || !canJoin} onClick={handleParticipation} className="mt-4 w-full">
-        {pending ? "Bekleniyor…" : participation.attending ? "Katılımı iptal et" : participation.is_sold_out ? "Tükendi" : "Katıl"}
+        {pending ? "Waiting…" : participation.attending ? "Cancel attendance" : participation.is_sold_out ? "Sold out" : "Join"}
       </Button>
       {error ? <p className="mt-3 text-xs leading-5 text-red-200">{error}</p> : null}
     </section>

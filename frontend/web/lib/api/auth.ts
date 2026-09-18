@@ -1,101 +1,122 @@
 import { apiBaseUrl } from "./events";
+import { resolveNimiqAuthConfig } from "@/lib/auth/nimiq-network";
 
 export type AuthUser = {
   id: string;
   email: string;
   first_name: string;
   last_name: string;
+  display_name?: string;
+  wallet_address?: string;
   status: string;
   created_at: string;
 };
 
-type LoginResponse = {
-  token: string;
-  user: AuthUser;
+export type AuthSession = { token?: string; user: AuthUser };
+export type NimiqTransport = "mini-app" | "hub";
+export type NimiqChallenge = {
+  challenge_id: string;
+  message: string;
+  wallet_address: string;
+  network: string;
+  environment: string;
+  purpose: "AUTH_LOGIN";
+  transport: NimiqTransport;
+  issued_at: string;
+  expires_at: string;
 };
 
-type RegisterInput = {
-  email: string;
-  password: string;
-  first_name: string;
-  last_name: string;
-};
-
-type LoginInput = {
-  email: string;
-  password: string;
-};
-
-export type AuthSession = {
-  token: string;
-  user: AuthUser;
-};
+type VerifyNimiqInput = { challenge_id: string; message: string; public_key: string; signature: string; account_label?: string };
 
 export class AuthApiError extends Error {
-  constructor(public readonly status: number, message = "Authentication request failed") {
-    super(message);
-    this.name = "AuthApiError";
+  constructor(public readonly status: number, message = "Authentication request failed", public readonly code = "") {
+    super(message); this.name = "AuthApiError";
   }
+}
+
+export function isLostSessionStatus(status: number) {
+  return status === 401 || status === 404;
 }
 
 const sessionKey = "nimnear.auth.session";
 
 async function throwAuthApiError(response: Response): Promise<never> {
-  const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
-  throw new AuthApiError(response.status, payload?.message ?? payload?.error ?? "Authentication request failed");
+  const payload = (await response.json().catch(() => null)) as { message?: string; error?: string; error_code?: string } | null;
+  throw new AuthApiError(response.status, payload?.message ?? payload?.error ?? "Authentication request failed", payload?.error_code ?? "");
 }
 
-export async function login(input: LoginInput): Promise<AuthSession> {
-  const response = await fetch(new URL("/api/v1/auth/login", apiBaseUrl), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+export async function createNimiqChallenge(walletAddress: string, transport: NimiqTransport): Promise<NimiqChallenge> {
+  const network = resolveNimiqAuthConfig();
+  if (!network.ok) {
+    throw new AuthApiError(500, network.message, network.code);
+  }
+  const response = await fetch(new URL("/api/v1/auth/nimiq/challenges", apiBaseUrl), {
+    method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wallet_address: walletAddress, network: network.network, environment: network.environment, purpose: "AUTH_LOGIN", transport }),
   });
-
   if (!response.ok) await throwAuthApiError(response);
-  return (await response.json()) as LoginResponse;
+  const challenge = (await response.json()) as NimiqChallenge;
+  if (!challenge.challenge_id || !challenge.message || challenge.wallet_address !== walletAddress && challenge.wallet_address.replace(/\s/g, "") !== walletAddress.replace(/\s/g, "")) {
+    throw new AuthApiError(502, "The server returned an invalid authentication message.", "malformed_challenge_response");
+  }
+  return challenge;
 }
 
-export async function register(input: RegisterInput): Promise<AuthUser> {
-  const response = await fetch(new URL("/api/v1/auth/register", apiBaseUrl), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+export async function verifyNimiqChallenge(input: VerifyNimiqInput): Promise<AuthSession> {
+  const response = await fetch(new URL("/api/v1/auth/nimiq/verify", apiBaseUrl), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  if (!response.ok) await throwAuthApiError(response);
+  const session = (await response.json()) as AuthSession;
+  return { user: session.user };
+}
 
+export async function fetchCurrentUser(token?: string): Promise<AuthUser> {
+  const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+  const response = await fetch(new URL("/api/v1/me", apiBaseUrl), { headers, credentials: "include", cache: "no-store" });
   if (!response.ok) await throwAuthApiError(response);
   return (await response.json()) as AuthUser;
 }
 
-export async function fetchCurrentUser(token: string): Promise<AuthUser> {
-  const response = await fetch(new URL("/api/v1/me", apiBaseUrl), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!response.ok) await throwAuthApiError(response);
-  return (await response.json()) as AuthUser;
-}
-
-export function readAuthSession(): AuthSession | null {
-  if (typeof window === "undefined") return null;
-
-  const stored = window.sessionStorage.getItem(sessionKey);
-  if (!stored) return null;
-
+export async function restoreAuthSession(): Promise<AuthSession | null> {
   try {
-    const session = JSON.parse(stored) as Partial<AuthSession>;
-    if (!session.token || !session.user) return null;
-    return session as AuthSession;
-  } catch {
-    window.sessionStorage.removeItem(sessionKey);
+    const user = await fetchCurrentUser();
+    const session = { user };
+    writeAuthSession(session);
+    return session;
+  } catch (error) {
+    if (error instanceof AuthApiError && isLostSessionStatus(error.status)) clearAuthSession();
     return null;
   }
 }
 
-export function writeAuthSession(session: AuthSession) {
-  window.sessionStorage.setItem(sessionKey, JSON.stringify(session));
+export async function logout() {
+  const response = await fetch(new URL("/api/v1/auth/logout", apiBaseUrl), { method: "POST", credentials: "include" });
+  if (!response.ok) await throwAuthApiError(response);
 }
 
+export async function deleteAccount() {
+  const response = await fetch(new URL("/api/v1/me", apiBaseUrl), { method: "DELETE", credentials: "include" });
+  if (!response.ok) await throwAuthApiError(response);
+}
+
+export function readAuthSession(): AuthSession | null {
+  if (typeof window === "undefined") return null;
+  const stored = window.sessionStorage.getItem(sessionKey);
+  if (!stored) return null;
+  try {
+    const session = JSON.parse(stored) as Partial<AuthSession>;
+    if (!session.user) return null;
+    return { user: session.user };
+  } catch { window.sessionStorage.removeItem(sessionKey); return null; }
+}
+export function writeAuthSession(session: AuthSession) {
+  window.sessionStorage.setItem(sessionKey, JSON.stringify({ user: session.user }));
+  window.dispatchEvent(new Event("nimnear-auth-changed"));
+}
 export function clearAuthSession() {
   window.sessionStorage.removeItem(sessionKey);
+  window.dispatchEvent(new Event("nimnear-auth-changed"));
+}
+export function accountDisplayName(user: Pick<AuthUser, "email" | "first_name" | "last_name"> & { display_name?: string; wallet_address?: string }) {
+  const combinedName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim();
+  return [user.display_name, combinedName, user.wallet_address, user.email].map((value) => value?.trim()).find(Boolean) || "NIMNear user";
 }

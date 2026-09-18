@@ -34,3 +34,15 @@ type Calendar struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
+
+// Patch contains explicit calendar field updates.
+type Patch struct {
+	NameSet        bool
+	Name           string
+	DescriptionSet bool
+	Description    string
+	ImageURLSet    bool
+	ImageURL       string
+	VisibilitySet  bool
+	Visibility     Visibility
+}

@@ -15,17 +15,17 @@ export function CalendarFollowButton({ calendarId, initialFollowing = false }: {
     if (pending) return;
     const session = readAuthSession();
     if (!session) {
-      setError("Takip etmek için NIMNear backend oturumu gerekli. Nimiq bağlantısı tek başına yetkilendirme sağlamaz.");
+      setError("A NIMNear backend session is required to follow calendars. A Nimiq connection alone does not provide authorization.");
       return;
     }
     setPending(true);
     setError(null);
     try {
-      if (following) await unfollowCalendar(calendarId, session.token);
-      else await followCalendar(calendarId, session.token);
+      if (following) await unfollowCalendar(calendarId);
+      else await followCalendar(calendarId);
       setFollowing((value) => !value);
     } catch {
-      setError("Takvim takip durumu güncellenemedi.");
+      setError("Calendar follow status could not be updated.");
     } finally {
       setPending(false);
     }
@@ -34,7 +34,7 @@ export function CalendarFollowButton({ calendarId, initialFollowing = false }: {
   return (
     <div className="space-y-2">
       <Button type="button" variant={following ? "soft" : "outline"} size="sm" disabled={pending} onClick={() => { void toggle(); }}>
-        {pending ? "Güncelleniyor…" : following ? "Takipte" : "Takip et"}
+        {pending ? "Updating…" : following ? "Following" : "Follow"}
       </Button>
       {error ? <p className="max-w-xs text-right text-[11px] leading-4 text-red-200" role="alert">{error}</p> : null}
     </div>

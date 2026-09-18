@@ -20,9 +20,13 @@ type State struct {
 	Attending     bool
 	AttendeeCount int
 	Capacity      *int
+	SoldOut       bool
 }
 
 // IsSoldOut reports whether a configured capacity has been reached.
 func (s State) IsSoldOut() bool {
+	if s.SoldOut {
+		return true
+	}
 	return s.Capacity != nil && s.AttendeeCount >= *s.Capacity
 }

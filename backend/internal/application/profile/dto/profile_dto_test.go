@@ -40,7 +40,7 @@ func TestPublicProfileInfoOptionalFieldsUseExplicitNull(t *testing.T) {
 	if err := json.Unmarshal(payload, &fields); err != nil {
 		t.Fatalf("unmarshal PublicProfileInfo JSON: %v", err)
 	}
-	for _, name := range []string{"username", "bio", "avatar_url"} {
+	for _, name := range []string{"username", "bio", "avatar_url", "wallet_address"} {
 		value, ok := fields[name]
 		if !ok {
 			t.Fatalf("optional field %q was omitted", name)

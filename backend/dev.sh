@@ -24,9 +24,11 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$PROJECT_ROOT/deployments/docker-compose.yml"
 MIGRATION_DIR="$PROJECT_ROOT/internal/infrastructure/postgres/migrations"
-DB_USER="masterfabric"
-DB_NAME="masterfabric"
-DB_CONTAINER="masterfabric-postgres"
+DB_USER="nimnear"
+DB_PASSWORD="nimnear"
+DB_NAME="nimnear"
+DB_CONTAINER="nimnear-postgres"
+export DB_USER DB_PASSWORD DB_NAME
 
 # Build env — workaround for macOS sandbox permissions on /var/folders
 export GOTMPDIR="$PROJECT_ROOT/tmp"
@@ -36,6 +38,25 @@ export CGO_ENABLED=0
 
 # Kafka env
 export KAFKA_ENABLED=true
+
+# Browser and Nimiq Pay WebView development origins. The frontend derives
+# its API hostname from the URL used to open the app, so keep the same hosts here.
+NIMNEAR_DEV_LAN_IP="${NIMNEAR_DEV_LAN_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+export CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://${NIMNEAR_DEV_LAN_IP}:3000,http://${NIMNEAR_DEV_LAN_IP}:5173}"
+export NIMNEAR_AUTH_NETWORK="${NIMNEAR_AUTH_NETWORK:-test-albatross}"
+export NIMNEAR_AUTH_ENVIRONMENT="${NIMNEAR_AUTH_ENVIRONMENT:-testnet}"
+export NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK="${NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK:-$NIMNEAR_AUTH_NETWORK}"
+export NIMNEAR_AUTH_DOMAIN="${NIMNEAR_AUTH_DOMAIN:-nimnear.local}"
+
+# Local development uses TestAlbatross. The public endpoint at
+# https://rpc.nimiqwatch.com is MainAlbatross and must not be paired with
+# NIMNEAR_NIMIQ_NETWORK=test-albatross. The testnet sibling below was
+# live-verified as TestAlbatross (network id 5). It is rate-limited and is
+# not production RPC infrastructure. Payment config must be supplied as a
+# set because NIMNEAR_NIMIQ_RPC_URL is created through that existing bundle.
+export NIMNEAR_NIMIQ_NETWORK="${NIMNEAR_NIMIQ_NETWORK:-test-albatross}"
+export NIMNEAR_NIMIQ_RPC_URL="${NIMNEAR_NIMIQ_RPC_URL:-https://rpc.testnet.nimiqwatch.com}"
+export NIMNEAR_MERCHANT_ADDRESS="${NIMNEAR_MERCHANT_ADDRESS:-NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604}"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -108,7 +129,7 @@ start_infra() {
     docker compose -f "$COMPOSE_FILE" up -d
 
     log_info "Waiting for services to become healthy..."
-    local services=("masterfabric-postgres" "masterfabric-redis" "masterfabric-kafka")
+    local services=("nimnear-postgres" "nimnear-redis" "nimnear-kafka")
     for svc in "${services[@]}"; do
         local retries=30
         for i in $(seq 1 $retries); do
@@ -242,7 +263,10 @@ cmd_help() {
     echo ""
     echo "Environment:"
     echo "  KAFKA_ENABLED=true   (default: true)"
-    echo "  DB_DSN=postgres://masterfabric:masterfabric@localhost:5432/masterfabric?sslmode=disable"
+    echo "  DB_DSN=postgres://nimnear:nimnear@localhost:5432/nimnear?sslmode=disable"
+    echo "  NIMNEAR_AUTH_NETWORK=${NIMNEAR_AUTH_NETWORK}"
+    echo "  NIMNEAR_NIMIQ_NETWORK=${NIMNEAR_NIMIQ_NETWORK}"
+    echo "  NIMNEAR_NIMIQ_RPC_URL=${NIMNEAR_NIMIQ_RPC_URL}"
     echo ""
     echo "Endpoints (when running):"
     echo "  API:        http://localhost:8080"

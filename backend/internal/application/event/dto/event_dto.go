@@ -1,9 +1,11 @@
 package dto
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterfabric-go/masterfabric/internal/domain/event/model"
 )
 
 // ListEventsQuery contains the supported public event discovery filters.
@@ -33,6 +35,80 @@ type CreateEventRequest struct {
 	Longitude   *float64   `json:"longitude,omitempty"`
 	Address     *string    `json:"address,omitempty"`
 	City        string     `json:"city"`
+}
+
+// OptionalInt and OptionalUUID preserve explicit null in event PATCH requests.
+type OptionalInt struct {
+	Set   bool
+	Value *int
+}
+
+func (v *OptionalInt) UnmarshalJSON(data []byte) error {
+	v.Set = true
+	if string(data) == "null" {
+		v.Value = nil
+		return nil
+	}
+	var value int
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	v.Value = &value
+	return nil
+}
+
+type OptionalUUID struct {
+	Set   bool
+	Value *uuid.UUID
+}
+
+func (v *OptionalUUID) UnmarshalJSON(data []byte) error {
+	v.Set = true
+	if string(data) == "null" {
+		v.Value = nil
+		return nil
+	}
+	var value uuid.UUID
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	v.Value = &value
+	return nil
+}
+
+// UpdateEventRequest contains only organizer-editable, non-financial fields.
+type UpdateEventRequest struct {
+	Title       *string      `json:"title"`
+	Description *string      `json:"description"`
+	StartsAt    *time.Time   `json:"starts_at"`
+	EndsAt      *time.Time   `json:"ends_at"`
+	ImageURL    *string      `json:"image_url"`
+	Capacity    OptionalInt  `json:"capacity"`
+	PlaceID     OptionalUUID `json:"place_id"`
+}
+
+func (r UpdateEventRequest) Empty() bool {
+	return r.Title == nil && r.Description == nil && r.StartsAt == nil && r.EndsAt == nil && r.ImageURL == nil && !r.Capacity.Set && !r.PlaceID.Set
+}
+
+func (r UpdateEventRequest) Patch() model.Patch {
+	patch := model.Patch{Capacity: r.Capacity.Value, CapacitySet: r.Capacity.Set, PlaceID: r.PlaceID.Value, PlaceIDSet: r.PlaceID.Set}
+	if r.Title != nil {
+		patch.Title, patch.TitleSet = *r.Title, true
+	}
+	if r.Description != nil {
+		patch.Description, patch.DescriptionSet = *r.Description, true
+	}
+	if r.StartsAt != nil {
+		patch.StartsAt, patch.StartsAtSet = r.StartsAt.UTC(), true
+	}
+	if r.EndsAt != nil {
+		patch.EndsAt, patch.EndsAtSet = r.EndsAt.UTC(), true
+	}
+	if r.ImageURL != nil {
+		patch.ImageURL, patch.ImageURLSet = *r.ImageURL, true
+	}
+	return patch
 }
 
 // EventInfo is the explicit public representation of an event.

@@ -12,7 +12,7 @@ Frontend source: `frontend/web`
 - Tailwind CSS
 - shadcn/ui
 - @nimiq/mini-app-sdk
-- qrcode and html5-qrcode are installed dependencies for future/isolated ticket or check-in surfaces; no ticket or QR product flow is currently exposed.
+- qrcode for payment-request QR rendering. html5-qrcode was unused and has been removed.
 
 ## Primary Environment
 
@@ -56,18 +56,17 @@ Use "use client" only where required.
 - /calendars/[id]
 - /profile
 - /profiles/[id]
-- /profile/edit
 
 
 ### Calendar discovery
 
 `/calendars` is a server-rendered public calendar surface backed by `GET /api/v1/calendars`. `/calendars/[id]` uses `GET /api/v1/calendars/{id}` and renders only the associated backend events returned by that response. Public list/detail pages distinguish loading, empty, error, and not-found states and never substitute static calendar records.
 
-The authenticated workspace reads `GET /api/v1/me/calendars` and renders real `Takvimlerim` and `Takip edilenler` collections. Calendar creation and follow/unfollow actions send the existing backend JWT. A connected Nimiq account without that JWT is shown a restrained blocked state; `listAccounts()` is never treated as backend authentication.
+The authenticated workspace reads `GET /api/v1/me/calendars` and renders real `My calendars` and `Following` collections. Calendar creation, owner-only `PATCH /api/v1/calendars/{id}` updates, owner-only archive, and follow/unfollow actions use the HttpOnly Nimiq session cookie (`credentials: include`). Archived calendars remain in the owner workspace, stay out of public discovery, and cannot receive new events. `listAccounts()` alone is never treated as backend authentication.
 
 ### Location-driven discovery
 
-The homepage does not request location on load and does not assume Istanbul or another city. The user must explicitly choose `Konumumu kullan`. The browser geolocation result is sent only to `GET /api/v1/places/nearby` for the existing radius-bounded search and is not stored as profile data. Permission denied, unsupported WebView/browser, timeout, backend failure, and no-nearby-place results have distinct UI states; users can continue browsing `/events` without location. Successful nearby places link to `/places/{id}`, whose event list is filtered server-side by the stable place UUID.
+The homepage does not request location on load and does not assume Istanbul or another city. The user must explicitly choose `Use my location`. The browser geolocation result is sent only to `GET /api/v1/places/nearby` for the existing radius-bounded search and is not stored as profile data. Permission denied, unsupported WebView/browser, timeout, backend failure, and no-nearby-place results have distinct UI states; users can continue browsing `/events` without location. Successful nearby places link to `/places/{id}`, whose event list is filtered server-side by the stable place UUID.
 
 Likely client-side areas include:
 - Nimiq SDK integration;
@@ -197,6 +196,8 @@ Frontend components should consume typed application-level functions.
 
 Only environment variables that are safe to expose to the browser may use `NEXT_PUBLIC_*`.
 
+`NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK` selects TestAlbatross (`test-albatross`) or MainAlbatross (`main-albatross`) for Hub login and AUTH_LOGIN challenges. Unknown values fail safely. It is not a secret.
+
 Never place secrets, private API keys or backend credentials in public frontend environment variables.
 
 ## Nimiq
@@ -209,7 +210,13 @@ Nimiq browser/WebView integrations should be placed in client components or clie
 
 Do not implement custom private-key storage.
 
-The current legacy JWT compatibility session is stored in browser sessionStorage by the existing auth API module. This is technical debt retained for protected operations; it is not a native Nimiq identity and must not be treated as one. Native listAccounts() success does not populate this session.
+Implemented: Nimiq wallet authentication issues an HttpOnly session cookie.
+The Mini App restores that session with `credentials: include` and does not
+store a JWT in sessionStorage or localStorage. `listAccounts()` success is
+still not authentication by itself.
+
+Planned / not implemented: device identifier, RPC WebSocket listener, generic
+payments API, transaction history UI, and deep-link payment requests.
 
 ## Quality
 
@@ -231,9 +238,9 @@ Run a dedicated typecheck script too if the project defines one.
 
 ## Event creation
 
-`/events/create` remains protected by the existing backend JWT. Native Nimiq
+`/events/create` is protected by the Nimiq session cookie. Native Nimiq
 `listAccounts()` connection is not treated as authentication; users without a
-valid JWT see the blocked native-connect state and cannot submit the form.
+backend session see NimiqConnect and cannot submit the form.
 
 The form loads the authenticated user's owned calendars from
 `GET /api/v1/me/calendars` and offers only those real active records. Nearby
@@ -279,7 +286,9 @@ The frontend now includes:
 - typed profile API functions in lib/api/profiles.ts;
 - organizer identity on event detail when organizer_id resolves to the public profile API.
 
-The Profile screen uses the confirmed Figma hierarchy: avatar fallback, display name, optional handle/bio, join date, organized/attended counts, tabs, real event cards, loading, error, and empty states. The authenticated self profile also links to the inferred `/profile/edit` route. That route uses the typed `PATCH /api/v1/me/profile` API for display name, username, and plain-text bio only; avatar and account identity fields remain read-only. Public profiles do not expose the edit control.
+The Profile screen uses the confirmed Figma hierarchy: avatar fallback, display name, optional handle/bio, join date, organized/attended counts, tabs, real event cards, loading, error, and empty states. Authenticated self-profile editing is inline on `/profile` via `PATCH /api/v1/me/profile` for display name, username, and plain-text bio only; avatar and account identity fields remain read-only. The unused `/profile/edit` route was removed. Public profiles do not expose the edit control. The self profile also includes logout and a confirmation-gated `DELETE /api/v1/me` account deletion action.
+
+The header notification bell was a disabled “coming soon” control and has been removed. Homepage category cards implied discovery that does not exist and have been removed.
 
 The profile API is public and privacy-safe. The frontend does not display email as profile identity, and it does not fabricate organizer names, avatars, venue metadata, payment state, tickets, QR codes, or invitation state.
 
@@ -307,3 +316,9 @@ Paid future events use the existing event-detail sidebar and a restrained EventP
 - Confirmed UI stops at the purchase confirmation message. Ticket, QR, checkout, refund, and booking actions are not implemented.
 
 The paid component is client-side because the Mini App provider is browser/WebView-only. It does not handle keys, secrets, or production funds.
+
+## Production deployment
+
+Primary frontend target is Vercel with Root Directory `frontend/web`. Docker standalone remains an alternative. See `docs/VERCEL_DEPLOYMENT.md`.
+
+A strict Content-Security-Policy is deferred. Next.js, Nimiq Mini App, and optional Hub popups would break under a naive CSP. Baseline headers (`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Permissions-Policy`, and Hub-compatible COOP) are set in `next.config.ts`.

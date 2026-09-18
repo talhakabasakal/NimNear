@@ -54,6 +54,31 @@ func (f *fakeCalendarRepository) Follow(context.Context, uuid.UUID, uuid.UUID) e
 	return nil
 }
 func (f *fakeCalendarRepository) Unfollow(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (f *fakeCalendarRepository) UpdateOwned(_ context.Context, calendarID, ownerID uuid.UUID, patch calendarModel.Patch, _ time.Time) (*calendarModel.Calendar, error) {
+	if f.detail == nil || f.detail.ID != calendarID {
+		return nil, domainErr.New(domainErr.ErrNotFound, "calendar not found", nil)
+	}
+	if f.detail.OwnerID != ownerID {
+		return nil, domainErr.New(domainErr.ErrNotFound, "calendar not found", nil)
+	}
+	if patch.NameSet {
+		f.detail.Name = patch.Name
+	}
+	if patch.DescriptionSet {
+		f.detail.Description = patch.Description
+	}
+	if patch.VisibilitySet {
+		f.detail.Visibility = patch.Visibility
+	}
+	return f.detail, nil
+}
+func (f *fakeCalendarRepository) ArchiveOwned(_ context.Context, calendarID, ownerID uuid.UUID, _ time.Time) (*calendarModel.Calendar, error) {
+	if f.detail == nil || f.detail.ID != calendarID || f.detail.OwnerID != ownerID {
+		return nil, domainErr.New(domainErr.ErrNotFound, "calendar not found", nil)
+	}
+	f.detail.Status = calendarModel.StatusArchived
+	return f.detail, nil
+}
 
 var _ calendarRepo.CalendarRepository = (*fakeCalendarRepository)(nil)
 
@@ -152,5 +177,43 @@ func TestFollowDelegatesIdempotentRepositoryOperation(t *testing.T) {
 	}
 	if repo.follows != 2 {
 		t.Fatalf("follow calls = %d, want 2 delegated idempotent calls", repo.follows)
+	}
+}
+
+func TestUpdateAllowsOwnerAndRejectsNonOwner(t *testing.T) {
+	ownerID := uuid.New()
+	calendar := publicCalendar(uuid.New())
+	calendar.OwnerID = ownerID
+	name := "Renamed calendar"
+	uc := NewCalendarUseCase(&fakeCalendarRepository{detail: calendar}, &fakeCalendarEventRepository{})
+	result, err := uc.Update(context.Background(), ownerID, calendar.ID, dto.UpdateCalendarRequest{Name: &name})
+	if err != nil {
+		t.Fatalf("owner update: %v", err)
+	}
+	if result.Data.Name != name {
+		t.Fatalf("name = %q", result.Data.Name)
+	}
+	_, err = uc.Update(context.Background(), uuid.New(), calendar.ID, dto.UpdateCalendarRequest{Name: &name})
+	if err == nil || !errors.Is(err, domainErr.ErrForbidden) {
+		t.Fatalf("non-owner update error = %v, want forbidden", err)
+	}
+}
+
+func TestArchiveAllowsOwnerAndRejectsNonOwner(t *testing.T) {
+	ownerID := uuid.New()
+	calendar := publicCalendar(uuid.New())
+	calendar.OwnerID = ownerID
+	uc := NewCalendarUseCase(&fakeCalendarRepository{detail: calendar}, &fakeCalendarEventRepository{})
+	result, err := uc.Archive(context.Background(), ownerID, calendar.ID)
+	if err != nil {
+		t.Fatalf("owner archive: %v", err)
+	}
+	if result.Data.Status != string(calendarModel.StatusArchived) {
+		t.Fatalf("status = %q", result.Data.Status)
+	}
+	calendar.Status = calendarModel.StatusActive
+	_, err = uc.Archive(context.Background(), uuid.New(), calendar.ID)
+	if err == nil || !errors.Is(err, domainErr.ErrForbidden) {
+		t.Fatalf("non-owner archive error = %v, want forbidden", err)
 	}
 }

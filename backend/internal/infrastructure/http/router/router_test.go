@@ -17,11 +17,14 @@ import (
 	calendarHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/calendar"
 	eventHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/event"
 	participationHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventparticipation"
+	eventpurchaseHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventpurchase"
 	iamHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/iam"
+	paymentrequestHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/paymentrequest"
 	placeHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/place"
 	profileHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/profile"
 	realtimeHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/realtime"
 	tenantHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/tenant"
+	walletHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/wallet"
 )
 
 // fullyWiredDeps returns Dependencies with every optional handler and the
@@ -29,19 +32,25 @@ import (
 // and middleware registration in New.
 func fullyWiredDeps() Dependencies {
 	return Dependencies{
-		Logger:               slog.New(slog.NewTextHandler(io.Discard, nil)),
-		MaxBodyBytes:         1 << 20,
-		IAMHandler:           &iamHandler.Handler{},
-		TenantHandler:        &tenantHandler.Handler{},
-		APIMgmtHandler:       &apimgmtHandler.Handler{},
-		AuditHandler:         &auditHandler.Handler{},
-		CalendarHandler:      &calendarHandler.Handler{},
-		EventHandler:         &eventHandler.Handler{},
-		ParticipationHandler: &participationHandler.Handler{},
-		ProfileHandler:       &profileHandler.Handler{},
-		PlaceHandler:         &placeHandler.Handler{},
-		RealtimeHandler:      &realtimeHandler.Handler{},
-		GatewayPipeline:      &gateway.Pipeline{},
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxBodyBytes:          1 << 20,
+		PaymentsEnabled:       true,
+		EmailAuthEnabled:      true,
+		PlatformAPIEnabled:    true,
+		IAMHandler:            &iamHandler.Handler{},
+		TenantHandler:         &tenantHandler.Handler{},
+		APIMgmtHandler:        &apimgmtHandler.Handler{},
+		AuditHandler:          &auditHandler.Handler{},
+		CalendarHandler:       &calendarHandler.Handler{},
+		EventHandler:          &eventHandler.Handler{},
+		ParticipationHandler:  &participationHandler.Handler{},
+		ProfileHandler:        &profileHandler.Handler{},
+		PlaceHandler:          &placeHandler.Handler{},
+		WalletHandler:         &walletHandler.Handler{},
+		PaymentRequestHandler: &paymentrequestHandler.Handler{},
+		PurchaseHandler:       &eventpurchaseHandler.Handler{},
+		RealtimeHandler:       &realtimeHandler.Handler{},
+		GatewayPipeline:       &gateway.Pipeline{},
 	}
 }
 
@@ -83,6 +92,10 @@ func TestNewRoutePatterns(t *testing.T) {
 		"GET /health/ready",
 		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/login",
+		"POST /api/v1/auth/token",
+		"POST /api/v1/auth/logout",
+		"POST /api/v1/auth/nimiq/challenges",
+		"POST /api/v1/auth/nimiq/verify",
 		"GET /api/v1/places/nearby",
 		"GET /api/v1/places/{id}",
 		"GET /api/v1/events",
@@ -94,6 +107,8 @@ func TestNewRoutePatterns(t *testing.T) {
 		"POST /api/v1/events",
 		"GET /api/v1/me/calendars",
 		"POST /api/v1/calendars",
+		"PATCH /api/v1/calendars/{id}",
+		"POST /api/v1/calendars/{id}/archive",
 		"POST /api/v1/calendars/{id}/follow",
 		"DELETE /api/v1/calendars/{id}/follow",
 		"GET /api/v1/events/{id}/rsvp",
@@ -101,7 +116,23 @@ func TestNewRoutePatterns(t *testing.T) {
 		"DELETE /api/v1/events/{id}/rsvp",
 		"GET /api/v1/ws",
 		"GET /api/v1/me",
+		"DELETE /api/v1/me",
 		"PATCH /api/v1/me/profile",
+		"GET /api/v1/wallet/balance",
+		"GET /api/v1/wallet/transactions",
+		"GET /api/v1/public/payment-requests/{public_id}",
+		"GET /api/v1/payment-requests",
+		"POST /api/v1/payment-requests",
+		"GET /api/v1/payment-requests/{public_id}",
+		"POST /api/v1/payment-requests/{public_id}/cancel",
+		"POST /api/v1/payment-requests/{public_id}/transaction",
+		"POST /api/v1/payment-requests/{public_id}/reverify",
+		"POST /api/v1/events/{id}/purchases",
+		"GET /api/v1/events/{id}/purchases/current",
+		"GET /api/v1/purchases/{id}",
+		"GET /api/v1/purchases/{id}/payment-instructions",
+		"POST /api/v1/purchases/{id}/transaction",
+		"POST /api/v1/purchases/{id}/reverify",
 		"POST /api/v1/organizations/",
 		"GET /api/v1/organizations/{orgId}/apps/{appId}/endpoints/",
 		"GET /api/v1/organizations/{orgId}/workspaces/",
@@ -136,5 +167,85 @@ func TestSampleProductRouteIsNotReachable(t *testing.T) {
 		if strings.Contains(body, fabricated) {
 			t.Fatalf("sample record %q was reachable: %s", fabricated, body)
 		}
+	}
+}
+
+func TestPlatformDisabledKeepsProductRoutesAndHidesGateway(t *testing.T) {
+	deps := fullyWiredDeps()
+	deps.PlatformAPIEnabled = false
+	deps.EmailAuthEnabled = false
+	r := New(deps)
+
+	registered := map[string]bool{}
+	if err := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		registered[method+" "+route] = true
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	for _, want := range []string{
+		"GET /api/v1/me",
+		"DELETE /api/v1/me",
+		"PATCH /api/v1/me/profile",
+		"GET /api/v1/places/nearby",
+		"GET /api/v1/places/{id}",
+		"GET /api/v1/events",
+		"POST /api/v1/events",
+		"GET /api/v1/calendars",
+		"POST /api/v1/auth/nimiq/challenges",
+		"POST /api/v1/auth/nimiq/verify",
+		"GET /api/v1/wallet/balance",
+		"GET /api/v1/ws",
+		"GET /health/live",
+	} {
+		if !registered[want] {
+			t.Errorf("product route %q missing when platform is disabled", want)
+		}
+	}
+	for _, hide := range []string{
+		"POST /api/v1/auth/register",
+		"POST /api/v1/auth/login",
+		"POST /api/v1/auth/token",
+		"POST /api/v1/organizations/",
+		"GET /api/v1/organizations/{orgId}/apps/{appId}/endpoints/",
+		"GET /api/v1/organizations/{orgId}/audit-logs",
+	} {
+		if registered[hide] {
+			t.Errorf("legacy route %q still registered when disabled", hide)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/organizations", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("disabled platform organizations status=%d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "Define the endpoint first") {
+		t.Fatalf("gateway catch-all leaked while platform disabled: %s", rec.Body.String())
+	}
+}
+
+func TestMetricsPublicExposure(t *testing.T) {
+	publicDeps := fullyWiredDeps()
+	publicDeps.MetricsEnabled = true
+	publicDeps.MetricsPublic = true
+	publicRouter := New(publicDeps)
+	publicReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	publicRec := httptest.NewRecorder()
+	publicRouter.ServeHTTP(publicRec, publicReq)
+	if publicRec.Code != http.StatusOK {
+		t.Fatalf("public metrics status=%d", publicRec.Code)
+	}
+
+	hiddenDeps := fullyWiredDeps()
+	hiddenDeps.MetricsEnabled = true
+	hiddenDeps.MetricsPublic = false
+	hiddenRouter := New(hiddenDeps)
+	hiddenReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	hiddenRec := httptest.NewRecorder()
+	hiddenRouter.ServeHTTP(hiddenRec, hiddenReq)
+	if hiddenRec.Code != http.StatusNotFound {
+		t.Fatalf("production-hidden metrics status=%d body=%s", hiddenRec.Code, hiddenRec.Body.String())
 	}
 }

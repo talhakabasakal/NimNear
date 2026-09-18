@@ -1,6 +1,15 @@
 import { apiBaseUrl } from "./events";
+import { userFacingApiMessage } from "./http-error";
+import { withAuthSession } from "./session-request";
 
-export type PurchaseStatus = "pending" | "submitted" | "verifying" | "confirmed" | "failed" | "expired" | "cancelled";
+export type PurchaseStatus =
+  | "pending"
+  | "submitted"
+  | "verifying"
+  | "confirmed"
+  | "failed"
+  | "expired"
+  | "cancelled";
 
 export type PurchaseRecord = {
   id: string;
@@ -27,63 +36,119 @@ type PurchaseResponse = { data: PurchaseRecord };
 type PaymentInstructionsResponse = { data: PaymentInstructions };
 
 export class PurchasesApiError extends Error {
-  constructor(public readonly status: number, message = "Payment request failed", public readonly errorCode?: string) {
+  constructor(
+    public readonly status: number,
+    message = "Payment request failed",
+    public readonly errorCode?: string,
+  ) {
     super(message);
     this.name = "PurchasesApiError";
   }
 }
 
 async function throwPurchasesApiError(response: Response): Promise<never> {
-  const payload = (await response.json().catch(() => null)) as { message?: string; error?: string; error_code?: string } | null;
-  throw new PurchasesApiError(response.status, payload?.message ?? payload?.error ?? "Payment request failed", payload?.error_code);
+  const payload = (await response.json().catch(() => null)) as {
+    message?: string;
+    error?: string;
+    error_code?: string;
+  } | null;
+  throw new PurchasesApiError(
+    response.status,
+    userFacingApiMessage(
+      response.status,
+      payload?.message ?? payload?.error,
+      "Payment request failed",
+    ),
+    payload?.error_code,
+  );
 }
 
-export async function createOrGetPurchase(eventId: string, token: string): Promise<PurchaseRecord> {
-  const response = await fetch(new URL("/api/v1/events/" + encodeURIComponent(eventId) + "/purchases", apiBaseUrl), {
-    method: "POST",
-    headers: { Authorization: "Bearer " + token },
-  });
+export async function createOrGetPurchase(
+  eventId: string,
+  token?: string,
+): Promise<PurchaseRecord> {
+  const response = await fetch(
+    new URL(
+      "/api/v1/events/" + encodeURIComponent(eventId) + "/purchases",
+      apiBaseUrl,
+    ),
+    withAuthSession(token, {
+      method: "POST",
+    }),
+  );
   if (!response.ok) await throwPurchasesApiError(response);
   return ((await response.json()) as PurchaseResponse).data;
 }
 
-export async function fetchPurchase(purchaseId: string, token: string): Promise<PurchaseRecord> {
-  const response = await fetch(new URL("/api/v1/purchases/" + encodeURIComponent(purchaseId), apiBaseUrl), {
-    headers: { Authorization: "Bearer " + token },
-    cache: "no-store",
-  });
+export async function fetchPurchase(
+  purchaseId: string,
+  token?: string,
+): Promise<PurchaseRecord> {
+  const response = await fetch(
+    new URL("/api/v1/purchases/" + encodeURIComponent(purchaseId), apiBaseUrl),
+    withAuthSession(token, {
+      cache: "no-store",
+    }),
+  );
   if (!response.ok) await throwPurchasesApiError(response);
   return ((await response.json()) as PurchaseResponse).data;
 }
 
-export async function fetchCurrentPurchase(eventId: string, token: string): Promise<PurchaseRecord | null> {
-  const response = await fetch(new URL("/api/v1/events/" + encodeURIComponent(eventId) + "/purchases/current", apiBaseUrl), {
-    headers: { Authorization: "Bearer " + token },
-    cache: "no-store",
-  });
+export async function fetchCurrentPurchase(
+  eventId: string,
+  token?: string,
+): Promise<PurchaseRecord | null> {
+  const response = await fetch(
+    new URL(
+      "/api/v1/events/" + encodeURIComponent(eventId) + "/purchases/current",
+      apiBaseUrl,
+    ),
+    withAuthSession(token, {
+      cache: "no-store",
+    }),
+  );
   if (response.status === 404) return null;
   if (!response.ok) await throwPurchasesApiError(response);
   return ((await response.json()) as PurchaseResponse).data;
 }
 
-export async function fetchPaymentInstructions(purchaseId: string, token: string): Promise<PaymentInstructions> {
-  const response = await fetch(new URL("/api/v1/purchases/" + encodeURIComponent(purchaseId) + "/payment-instructions", apiBaseUrl), {
-    headers: { Authorization: "Bearer " + token },
-    cache: "no-store",
-  });
+export async function fetchPaymentInstructions(
+  purchaseId: string,
+  token?: string,
+): Promise<PaymentInstructions> {
+  const response = await fetch(
+    new URL(
+      "/api/v1/purchases/" +
+        encodeURIComponent(purchaseId) +
+        "/payment-instructions",
+      apiBaseUrl,
+    ),
+    withAuthSession(token, {
+      cache: "no-store",
+    }),
+  );
   if (!response.ok) await throwPurchasesApiError(response);
   return ((await response.json()) as PaymentInstructionsResponse).data;
 }
 
-export async function submitPurchaseTransaction(purchaseId: string, transactionHash: string, token: string): Promise<PurchaseRecord> {
-  const response = await fetch(new URL("/api/v1/purchases/" + encodeURIComponent(purchaseId) + "/transaction", apiBaseUrl), {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + token,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ transaction_hash: transactionHash }),
-  });
+export async function submitPurchaseTransaction(
+  purchaseId: string,
+  transactionHash: string,
+  token?: string,
+): Promise<PurchaseRecord> {
+  const response = await fetch(
+    new URL(
+      "/api/v1/purchases/" + encodeURIComponent(purchaseId) + "/transaction",
+      apiBaseUrl,
+    ),
+    withAuthSession(token, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ transaction_hash: transactionHash }),
+    }),
+  );
   if (!response.ok) await throwPurchasesApiError(response);
   return ((await response.json()) as PurchaseResponse).data;
 }

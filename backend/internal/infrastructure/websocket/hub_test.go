@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/masterfabric-go/masterfabric/internal/domain/realtime/model"
 	realtimeService "github.com/masterfabric-go/masterfabric/internal/domain/realtime/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +54,69 @@ func TestHub_Close(t *testing.T) {
 	err := hub.Close(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 0, hub.ConnectionCount())
+}
+
+func TestHub_UserScopedRoomsDoNotShareNilOrg(t *testing.T) {
+	hub := NewHub(nil, 10)
+	userA := uuid.New()
+	userB := uuid.New()
+	sendA := make(chan []byte, 1)
+	sendB := make(chan []byte, 1)
+	hub.Register(realtimeService.ClientInfo{ID: "a", UserID: userA}, sendA)
+	hub.Register(realtimeService.ClientInfo{ID: "b", UserID: userB}, sendB)
+
+	room, err := model.BuildUserRoomKey(userA, model.PaymentsChannel)
+	require.NoError(t, err)
+	hub.Broadcast(room, []byte(`{"type":"payment_request.paid"}`))
+
+	select {
+	case msg := <-sendA:
+		assert.Equal(t, `{"type":"payment_request.paid"}`, string(msg))
+	default:
+		t.Fatal("expected user A message")
+	}
+	select {
+	case msg := <-sendB:
+		t.Fatalf("user B leaked message %s", msg)
+	default:
+	}
+}
+
+func TestHub_ReconnectDoesNotReusePreviousClientState(t *testing.T) {
+	hub := NewHub(nil, 10)
+	userA := uuid.New()
+	userB := uuid.New()
+	sendA1 := make(chan []byte, 1)
+	sendB := make(chan []byte, 1)
+	unregisterA := hub.Register(realtimeService.ClientInfo{ID: "a-old", UserID: userA}, sendA1)
+	hub.Register(realtimeService.ClientInfo{ID: "b", UserID: userB}, sendB)
+	unregisterA()
+
+	sendA2 := make(chan []byte, 1)
+	hub.Register(realtimeService.ClientInfo{ID: "a-new", UserID: userA}, sendA2)
+
+	roomA, err := model.BuildUserRoomKey(userA, model.PaymentsChannel)
+	require.NoError(t, err)
+	hub.Broadcast(roomA, []byte(`{"type":"reconnect"}`))
+
+	select {
+	case msg := <-sendA2:
+		assert.Equal(t, `{"type":"reconnect"}`, string(msg))
+	default:
+		t.Fatal("new connection should receive user A events")
+	}
+	select {
+	case msg, ok := <-sendA1:
+		if ok {
+			t.Fatalf("closed connection received %#v", string(msg))
+		}
+	default:
+	}
+	select {
+	case msg := <-sendB:
+		t.Fatalf("user B leaked reconnect state %#v", string(msg))
+	default:
+	}
 }
 
 func TestHub_SendToClient(t *testing.T) {

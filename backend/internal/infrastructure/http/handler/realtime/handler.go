@@ -3,8 +3,10 @@ package realtime
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	gorillaws "github.com/gorilla/websocket"
@@ -26,6 +28,7 @@ type Handler struct {
 	pingSecs   int
 	logger     *slog.Logger
 	enabled    bool
+	cookieName string
 }
 
 // Config holds handler dependencies.
@@ -37,6 +40,7 @@ type Config struct {
 	PingInterval int
 	Logger       *slog.Logger
 	Enabled      bool
+	CookieName   string
 }
 
 // NewHandler creates a new WebSocket handler.
@@ -49,6 +53,7 @@ func NewHandler(cfg Config) *Handler {
 		pingSecs:   cfg.PingInterval,
 		logger:     cfg.Logger,
 		enabled:    cfg.Enabled,
+		cookieName: cfg.CookieName,
 	}
 }
 
@@ -59,29 +64,43 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := middleware.ExtractBearerToken(r)
-	if token == "" {
-		response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing token"})
+	userID, orgClaim, err := h.resolveUser(r)
+	if err != nil {
+		response.JSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 
-	claims, err := h.auth.ValidateToken(r.Context(), token)
-	if err != nil {
-		response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
-		return
+	orgID := resolveOrgID(r, orgClaim)
+	appIDStr := strings.TrimSpace(r.Header.Get("X-App-ID"))
+	var input *realtimeUC.ConnectInput
+	if appIDStr == "" {
+		if h.validateUC == nil {
+			input = &realtimeUC.ConnectInput{UserID: userID}
+		} else {
+			input, err = h.validateUC.ExecuteUser(r.Context(), userID)
+		}
+		if err != nil {
+			response.Error(w, err)
+			return
+		}
+	} else {
+		appID, parseErr := realtimeUC.ParseAppHeader(appIDStr)
+		if parseErr != nil {
+			response.Error(w, parseErr)
+			return
+		}
+		if h.validateUC == nil {
+			response.JSON(w, http.StatusBadRequest, map[string]string{"error": "app context required"})
+			return
+		}
+		input, err = h.validateUC.Execute(r.Context(), userID, orgID, appID)
+		if err != nil {
+			response.Error(w, err)
+			return
+		}
 	}
-
-	orgID := resolveOrgID(r, claims.OrganizationID)
-	appIDStr := r.Header.Get("X-App-ID")
-	appID, err := realtimeUC.ParseAppHeader(appIDStr)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-
-	input, err := h.validateUC.Execute(r.Context(), claims.UserID, orgID, appID)
-	if err != nil {
-		response.Error(w, err)
+	if input == nil || input.UserID == uuid.Nil {
+		response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authentication session"})
 		return
 	}
 
@@ -119,6 +138,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			"user_id", input.UserID,
 			"org_id", input.OrganizationID,
 			"app_id", input.AppID,
+			"scope", connectionScope(input),
 		)
 	}
 
@@ -171,6 +191,52 @@ func (h *Handler) sendControl(clientID, msgType, channel, message string) {
 
 func (h *Handler) sendError(clientID, message string) {
 	h.sendControl(clientID, model.TypeError, "", message)
+}
+
+func (h *Handler) resolveUser(r *http.Request) (uuid.UUID, uuid.UUID, error) {
+	if id, ok := middleware.UserIDFromContext(r.Context()); ok && id != uuid.Nil {
+		orgID, _ := middleware.OrgIDFromContext(r.Context())
+		return id, orgID, nil
+	}
+	token := h.extractToken(r)
+	if token == "" {
+		return uuid.Nil, uuid.Nil, errors.New("missing authentication session")
+	}
+	if h.auth == nil {
+		return uuid.Nil, uuid.Nil, errors.New("invalid token")
+	}
+	claims, err := h.auth.ValidateToken(r.Context(), token)
+	if err != nil || claims == nil || claims.UserID == uuid.Nil {
+		return uuid.Nil, uuid.Nil, errors.New("invalid token")
+	}
+	return claims.UserID, claims.OrganizationID, nil
+}
+
+func (h *Handler) extractToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	cookieName := h.cookieName
+	if cookieName == "" {
+		cookieName = "nimnear_session"
+	}
+	if cookie, err := r.Cookie(cookieName); err == nil {
+		if token := strings.TrimSpace(cookie.Value); token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func connectionScope(input *realtimeUC.ConnectInput) string {
+	if input != nil && input.AppID != uuid.Nil && input.OrganizationID != uuid.Nil {
+		return "app"
+	}
+	return "user"
 }
 
 func resolveOrgID(r *http.Request, claimOrgID uuid.UUID) uuid.UUID {

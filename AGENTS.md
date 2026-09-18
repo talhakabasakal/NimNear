@@ -37,7 +37,6 @@ nimnear/
 - shadcn/ui
 - @nimiq/mini-app-sdk
 - qrcode
-- html5-qrcode
 
 ### Backend
 - Go
@@ -49,6 +48,9 @@ nimnear/
 ### Infrastructure
 
 Local development uses Docker Compose for infrastructure services.
+
+From the repository root, `./dev.sh` starts infrastructure, the Go API, and the
+Next.js frontend together.
 
 Default local services:
 - Frontend: http://localhost:3000

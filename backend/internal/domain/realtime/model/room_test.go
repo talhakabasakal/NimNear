@@ -39,6 +39,18 @@ func TestParseRoomKey_RoundTrip(t *testing.T) {
 	assert.Equal(t, channel, parsedChannel)
 }
 
+func TestBuildUserRoomKey(t *testing.T) {
+	userID := uuid.New()
+	key, err := BuildUserRoomKey(userID, PaymentsChannel)
+	require.NoError(t, err)
+	assert.Equal(t, RoomKey("user:"+userID.String()+":channel:payments"), key)
+}
+
+func TestBuildUserRoomKey_RejectsNilUser(t *testing.T) {
+	_, err := BuildUserRoomKey(uuid.Nil, PaymentsChannel)
+	assert.Error(t, err)
+}
+
 func TestValidateChannelName(t *testing.T) {
 	assert.NoError(t, ValidateChannelName("events"))
 	assert.NoError(t, ValidateChannelName("api-management"))

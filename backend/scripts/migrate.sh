@@ -1,86 +1,61 @@
 #!/usr/bin/env bash
 #
-# migrate.sh - Database migration helper script
+# migrate.sh - Database migration helper
+#
+# Canonical migrations use goose against the Nimnear DSN.
+# Default DSN is the local Nimnear development database, never MasterFabric.
 #
 # Usage:
-#   ./scripts/migrate.sh up      - Run all pending migrations
-#   ./scripts/migrate.sh down     - Rollback last migration
-#   ./scripts/migrate.sh status   - Show migration status
-#   ./scripts/migrate.sh create NAME - Create new migration file
+#   ./scripts/migrate.sh up
+#   ./scripts/migrate.sh down
+#   ./scripts/migrate.sh status
+#   ./scripts/migrate.sh create NAME
 #
+# Override the target with DB_DSN. Destructive down requires an explicit DSN
+# when you are not targeting the local development database.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATION_DIR="$PROJECT_ROOT/internal/infrastructure/postgres/migrations"
-DB_DSN="${DB_DSN:-postgres://masterfabric:masterfabric@localhost:5432/masterfabric?sslmode=disable}"
+DEFAULT_DSN="postgres://nimnear:nimnear@localhost:5432/nimnear?sslmode=disable"
+DB_DSN="${DB_DSN:-$DEFAULT_DSN}"
+
+if echo "$DB_DSN" | grep -qi 'masterfabric'; then
+    echo "Refusing to run Nimnear migrations against a MasterFabric DSN. Set DB_DSN to a Nimnear database." >&2
+    exit 1
+fi
+
+if ! command -v goose >/dev/null 2>&1; then
+    echo "goose is required. Install with: go install github.com/pressly/goose/v3/cmd/goose@latest" >&2
+    exit 1
+fi
 
 cd "$PROJECT_ROOT"
 
 case "${1:-}" in
     up)
-        echo "🔄 Running migrations..."
-        for f in "$MIGRATION_DIR"/0*.sql; do
-            [[ -f "$f" ]] || continue
-            fname=$(basename "$f")
-            sql=$(sed -n '/^-- +goose Up$/,/^-- +goose Down$/p' "$f" | sed '1d;$d')
-            if [[ -n "$sql" ]]; then
-                echo "$sql" | docker exec -i masterfabric-postgres psql -U masterfabric -d masterfabric -q 2>/dev/null \
-                    && echo "  ✓ $fname" \
-                    || echo "  ⚠ $fname (may already exist)"
-            fi
-        done
-        echo "✅ Migrations complete"
+        echo "Running goose up against the configured Nimnear DSN..."
+        goose -dir "$MIGRATION_DIR" postgres "$DB_DSN" up
         ;;
     down)
-        echo "⬇️  Rolling back last migration..."
-        last_file=$(ls -t "$MIGRATION_DIR"/0*.sql 2>/dev/null | head -1)
-        if [[ -z "$last_file" ]]; then
-            echo "❌ No migrations found"
-            exit 1
-        fi
-        sql=$(sed -n '/^-- +goose Down$/,/^-- +goose Up$/p' "$last_file" | sed '1d;$d' || sed -n '/^-- +goose Down$/,/^$/p' "$last_file" | sed '1d')
-        if [[ -n "$sql" ]]; then
-            echo "$sql" | docker exec -i masterfabric-postgres psql -U masterfabric -d masterfabric -q
-            echo "✅ Rolled back: $(basename "$last_file")"
-        else
-            echo "⚠️  No down migration found in $(basename "$last_file")"
-        fi
+        echo "Rolling back last goose migration..."
+        goose -dir "$MIGRATION_DIR" postgres "$DB_DSN" down
         ;;
     status)
-        echo "📊 Migration status:"
-        docker exec masterfabric-postgres psql -U masterfabric -d masterfabric -c "
-            SELECT 
-                CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'goose_db_version')
-                THEN (SELECT version_id FROM goose_db_version ORDER BY id DESC LIMIT 1)
-                ELSE 'No migrations table'
-                END as current_version;
-        " 2>/dev/null || echo "  (Run migrations first)"
+        goose -dir "$MIGRATION_DIR" postgres "$DB_DSN" status
         ;;
     create)
         if [[ -z "${2:-}" ]]; then
-            echo "❌ Usage: $0 create MIGRATION_NAME"
+            echo "Usage: $0 create MIGRATION_NAME" >&2
             exit 1
         fi
         name="${2}"
         if [[ ! "$name" =~ ^[a-zA-Z0-9_]+$ ]]; then
-            echo "❌ Migration name may only contain letters, numbers, and underscores"
+            echo "Migration name may only contain letters, numbers, and underscores" >&2
             exit 1
         fi
-        timestamp=$(date +%Y%m%d%H%M%S)
-        filename="${MIGRATION_DIR}/${timestamp}_${name}.sql"
-        cat > "$filename" <<EOF
--- +goose Up
--- +goose StatementBegin
--- Add your migration SQL here
--- +goose StatementEnd
-
--- +goose Down
--- +goose StatementBegin
--- Add your rollback SQL here
--- +goose StatementEnd
-EOF
-        echo "✅ Created migration: $(basename "$filename")"
+        goose -dir "$MIGRATION_DIR" create "$name" sql
         ;;
     *)
         echo "Usage: $0 {up|down|status|create NAME}"

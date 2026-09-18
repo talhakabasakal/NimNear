@@ -32,6 +32,7 @@ type DynamicHandlerResolver struct {
 	logger        *slog.Logger
 	db            *pgxpool.Pool
 	serviceConfig map[string]ServiceConfig // Maps service name to configuration
+	allowedTables map[string]struct{}
 }
 
 // ServiceConfig holds configuration for a backend service.
@@ -59,7 +60,17 @@ func NewDynamicHandlerResolver(registry *BackendRegistry, logger *slog.Logger, d
 		logger:        logger,
 		db:            db,
 		serviceConfig: make(map[string]ServiceConfig),
+		allowedTables: map[string]struct{}{},
 	}
+}
+
+// WithAllowedTables sets the fail-closed dynamic gateway table allowlist.
+func (r *DynamicHandlerResolver) WithAllowedTables(tables []string) *DynamicHandlerResolver {
+	if r == nil {
+		return nil
+	}
+	r.allowedTables = allowlistSet(tables)
+	return r
 }
 
 // RegisterServiceConfig registers configuration for a backend service.
@@ -251,10 +262,12 @@ func (r *DynamicHandlerResolver) handleGeneric(ctx context.Context, endpoint *mo
 	if tableName == "" {
 		return r.errorResponse(http.StatusBadRequest, fmt.Sprintf("cannot determine table for service: %s", endpoint.BackendService)), nil
 	}
-
-	// Check if database is available
-	if r.db == nil {
-		return r.errorResponse(http.StatusInternalServerError, "database not available"), nil
+	if err := authorizeGatewayTable(tableName, r.allowedTables); err != nil {
+		return r.errorResponse(http.StatusForbidden, "table is not allowed"), nil
+	}
+	quotedTable, err := quoteSQLIdentifier(tableName)
+	if err != nil {
+		return r.errorResponse(http.StatusBadRequest, "invalid table name"), nil
 	}
 
 	// Parse request body if present
@@ -274,20 +287,23 @@ func (r *DynamicHandlerResolver) handleGeneric(ctx context.Context, endpoint *mo
 
 	switch strings.ToLower(endpoint.BackendAction) {
 	case "list":
-		responseData, statusCode, dbErr = r.handleList(ctx, tableName, orgID, appID, req)
+		responseData, statusCode, dbErr = r.handleList(ctx, quotedTable, orgID, appID, req)
 	case "get":
-		responseData, statusCode, dbErr = r.handleGet(ctx, tableName, orgID, appID, req)
+		responseData, statusCode, dbErr = r.handleGet(ctx, quotedTable, tableName, orgID, appID, req)
 	case "create":
-		responseData, statusCode, dbErr = r.handleCreate(ctx, tableName, orgID, appID, requestData)
+		responseData, statusCode, dbErr = r.handleCreate(ctx, quotedTable, orgID, appID, requestData, endpoint)
 	case "update", "patch":
-		responseData, statusCode, dbErr = r.handleUpdate(ctx, tableName, orgID, appID, req, requestData)
+		responseData, statusCode, dbErr = r.handleUpdate(ctx, quotedTable, tableName, orgID, appID, req, requestData, endpoint)
 	case "delete":
-		responseData, statusCode, dbErr = r.handleDelete(ctx, tableName, orgID, appID, req)
+		responseData, statusCode, dbErr = r.handleDelete(ctx, quotedTable, tableName, orgID, appID, req)
 	default:
 		return r.errorResponse(http.StatusBadRequest, fmt.Sprintf("unknown action: %s", endpoint.BackendAction)), nil
 	}
 
 	if dbErr != nil {
+		if statusCode == http.StatusBadRequest || statusCode == http.StatusForbidden {
+			return r.errorResponse(statusCode, dbErr.Error()), nil
+		}
 		if r.logger != nil {
 			r.logger.Error("database operation failed",
 				"error", dbErr,
@@ -321,6 +337,9 @@ func (r *DynamicHandlerResolver) handleGeneric(ctx context.Context, endpoint *mo
 
 // handleList performs SELECT query with pagination.
 func (r *DynamicHandlerResolver) handleList(ctx context.Context, tableName string, orgID, appID uuid.UUID, req *http.Request) (map[string]interface{}, int, error) {
+	if r.db == nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("database not available")
+	}
 	offset, _ := strconv.Atoi(req.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
@@ -374,9 +393,12 @@ func (r *DynamicHandlerResolver) handleList(ctx context.Context, tableName strin
 }
 
 // handleGet performs SELECT by ID.
-func (r *DynamicHandlerResolver) handleGet(ctx context.Context, tableName string, orgID, appID uuid.UUID, req *http.Request) (map[string]interface{}, int, error) {
+func (r *DynamicHandlerResolver) handleGet(ctx context.Context, quotedTable, rawTable string, orgID, appID uuid.UUID, req *http.Request) (map[string]interface{}, int, error) {
+	if r.db == nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("database not available")
+	}
 	// Extract ID from path (e.g., /orders/{id})
-	recordID, err := r.extractIDFromPath(req.URL.Path, tableName)
+	recordID, err := r.extractIDFromPath(req.URL.Path, rawTable)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -384,7 +406,7 @@ func (r *DynamicHandlerResolver) handleGet(ctx context.Context, tableName string
 	// Use JSON aggregation to get field names automatically
 	var jsonData []byte
 	err = r.db.QueryRow(ctx,
-		fmt.Sprintf(`SELECT row_to_json(t.*) FROM %s t WHERE id = $1 AND organization_id = $2 AND app_id = $3`, tableName),
+		fmt.Sprintf(`SELECT row_to_json(t.*) FROM %s t WHERE id = $1 AND organization_id = $2 AND app_id = $3`, quotedTable),
 		recordID, orgID, appID,
 	).Scan(&jsonData)
 	if err != nil {
@@ -403,23 +425,27 @@ func (r *DynamicHandlerResolver) handleGet(ctx context.Context, tableName string
 }
 
 // handleCreate performs INSERT operation.
-func (r *DynamicHandlerResolver) handleCreate(ctx context.Context, tableName string, orgID, appID uuid.UUID, input map[string]interface{}) (map[string]interface{}, int, error) {
+func (r *DynamicHandlerResolver) handleCreate(ctx context.Context, tableName string, orgID, appID uuid.UUID, input map[string]interface{}, endpoint *model.Endpoint) (map[string]interface{}, int, error) {
 	recordID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build dynamic INSERT query
-	columns := []string{"id", "organization_id", "app_id", "created_at", "updated_at"}
+	columns := []string{`"id"`, `"organization_id"`, `"app_id"`, `"created_at"`, `"updated_at"`}
 	values := []interface{}{recordID, orgID, appID, now, now}
 	placeholders := []string{"$1", "$2", "$3", "$4", "$5"}
 	paramIndex := 6
 
-	for key, value := range input {
-		if key != "id" && key != "organization_id" && key != "app_id" && key != "created_at" && key != "updated_at" {
-			columns = append(columns, key)
-			values = append(values, value)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", paramIndex))
-			paramIndex++
-		}
+	userColumns, userValues, err := authorizedColumns(input, declaredGatewayFields(endpoint))
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	if r.db == nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("database not available")
+	}
+	for i, column := range userColumns {
+		columns = append(columns, column)
+		values = append(values, userValues[i])
+		placeholders = append(placeholders, fmt.Sprintf("$%d", paramIndex))
+		paramIndex++
 	}
 
 	query := fmt.Sprintf(
@@ -431,7 +457,7 @@ func (r *DynamicHandlerResolver) handleCreate(ctx context.Context, tableName str
 	)
 
 	var jsonData []byte
-	err := r.db.QueryRow(ctx, query, values...).Scan(&jsonData)
+	err = r.db.QueryRow(ctx, query, values...).Scan(&jsonData)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create record: %w", err)
 	}
@@ -445,32 +471,36 @@ func (r *DynamicHandlerResolver) handleCreate(ctx context.Context, tableName str
 }
 
 // handleUpdate performs UPDATE operation.
-func (r *DynamicHandlerResolver) handleUpdate(ctx context.Context, tableName string, orgID, appID uuid.UUID, req *http.Request, input map[string]interface{}) (map[string]interface{}, int, error) {
-	recordID, err := r.extractIDFromPath(req.URL.Path, tableName)
+func (r *DynamicHandlerResolver) handleUpdate(ctx context.Context, quotedTable, rawTable string, orgID, appID uuid.UUID, req *http.Request, input map[string]interface{}, endpoint *model.Endpoint) (map[string]interface{}, int, error) {
+	recordID, err := r.extractIDFromPath(req.URL.Path, rawTable)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// Build dynamic UPDATE query
-	setParts := []string{"updated_at = $1"}
+	userColumns, userValues, err := authorizedColumns(input, declaredGatewayFields(endpoint))
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	if r.db == nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("database not available")
+	}
+
+	setParts := []string{`"updated_at" = $1`}
 	values := []interface{}{time.Now().UTC()}
 	paramIndex := 2
-
-	for key, value := range input {
-		if key != "id" && key != "organization_id" && key != "app_id" && key != "created_at" && key != "updated_at" {
-			setParts = append(setParts, fmt.Sprintf("%s = $%d", key, paramIndex))
-			values = append(values, value)
-			paramIndex++
-		}
+	for i, column := range userColumns {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", column, paramIndex))
+		values = append(values, userValues[i])
+		paramIndex++
 	}
 
 	values = append(values, recordID, orgID, appID)
 	query := fmt.Sprintf(
 		`UPDATE %s SET %s WHERE id = $%d AND organization_id = $%d AND app_id = $%d RETURNING row_to_json(%s.*)`,
-		tableName,
+		quotedTable,
 		strings.Join(setParts, ", "),
 		paramIndex, paramIndex+1, paramIndex+2,
-		tableName,
+		quotedTable,
 	)
 
 	var jsonData []byte
@@ -491,14 +521,17 @@ func (r *DynamicHandlerResolver) handleUpdate(ctx context.Context, tableName str
 }
 
 // handleDelete performs DELETE operation.
-func (r *DynamicHandlerResolver) handleDelete(ctx context.Context, tableName string, orgID, appID uuid.UUID, req *http.Request) (map[string]interface{}, int, error) {
-	recordID, err := r.extractIDFromPath(req.URL.Path, tableName)
+func (r *DynamicHandlerResolver) handleDelete(ctx context.Context, quotedTable, rawTable string, orgID, appID uuid.UUID, req *http.Request) (map[string]interface{}, int, error) {
+	if r.db == nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("database not available")
+	}
+	recordID, err := r.extractIDFromPath(req.URL.Path, rawTable)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	result, err := r.db.Exec(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND organization_id = $2 AND app_id = $3`, tableName),
+		fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND organization_id = $2 AND app_id = $3`, quotedTable),
 		recordID, orgID, appID,
 	)
 	if err != nil {

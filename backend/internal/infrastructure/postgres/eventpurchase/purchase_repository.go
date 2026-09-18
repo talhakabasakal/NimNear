@@ -3,6 +3,7 @@ package eventpurchase
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/model"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/repository"
+	"github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/nimiqtx"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 )
 
@@ -34,13 +36,12 @@ func (r *PurchaseRepo) Create(ctx context.Context, eventID, userID uuid.UUID, no
 
 	var priceLunas int64
 	var capacity *int
-	var attendeeCount int
 	var isPast bool
 	if err := tx.QueryRow(ctx, `
-        SELECT price_lunas, capacity, attendee_count, ends_at <= $2
+        SELECT price_lunas, capacity, ends_at <= $2
         FROM events
         WHERE id = $1 AND is_public = TRUE AND status = 'published'
-        FOR UPDATE`, eventID, now).Scan(&priceLunas, &capacity, &attendeeCount, &isPast); err != nil {
+        FOR UPDATE`, eventID, now).Scan(&priceLunas, &capacity, &isPast); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErr.New(domainErr.ErrNotFound, "event not found", nil)
 		}
@@ -52,10 +53,6 @@ func (r *PurchaseRepo) Create(ctx context.Context, eventID, userID uuid.UUID, no
 	if priceLunas <= 0 {
 		return nil, domainErr.NewWithCode(domainErr.ErrValidation, "paid_purchase_required", "purchases are available only for paid events", nil)
 	}
-	if capacity != nil && attendeeCount >= *capacity {
-		return nil, domainErr.New(domainErr.ErrSoldOut, "event is sold out", nil)
-	}
-
 	if _, err := tx.Exec(ctx, `
         UPDATE event_purchases
         SET status = 'expired', updated_at = $2
@@ -210,6 +207,13 @@ func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID
 		}
 		return &current, nil
 	}
+	var eventStatus string
+	if err := tx.QueryRow(ctx, "SELECT status FROM events WHERE id = $1 FOR UPDATE", current.EventID).Scan(&eventStatus); err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to read event status", err)
+	}
+	if eventStatus == "cancelled" {
+		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "event_cancelled", "cancelled events do not accept new payment submissions", nil)
+	}
 	if current.Status != model.StatusPending {
 		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_not_submittable", "purchase is not waiting for a transaction", nil)
 	}
@@ -230,6 +234,12 @@ func (r *PurchaseRepo) SubmitTransaction(ctx context.Context, purchaseID, userID
 			return nil, domainErr.NewWithCode(domainErr.ErrAlreadyExists, "transaction_hash_used", "transaction hash is already assigned to another purchase", err)
 		}
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to submit transaction", err)
+	}
+	if err := nimiqtx.Consume(ctx, tx, transactionHash, nimiqtx.DomainEventPurchase, submitted.ID, now); err != nil {
+		if isUniqueViolation(err) {
+			return nil, domainErr.NewWithCode(domainErr.ErrAlreadyExists, "transaction_hash_used", "transaction hash is already assigned to another purchase", err)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to consume transaction hash", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to commit transaction submission", err)
@@ -345,27 +355,135 @@ func (r *PurchaseRepo) ExpireUnresolved(ctx context.Context, purchaseID, userID 
 	return current, nil
 }
 
+// ConfirmExpiredRecovery is the only path that may move expired → confirmed, and only after
+// the shared verifier has already succeeded for this same consumed hash.
+func (r *PurchaseRepo) ConfirmExpiredRecovery(ctx context.Context, purchaseID, userID uuid.UUID, now time.Time) (*model.Purchase, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to begin expired purchase recovery", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var current model.Purchase
+	err = tx.QueryRow(ctx, `
+        SELECT id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+               reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
+               transaction_hash, created_at, updated_at, confirmed_at
+        FROM event_purchases
+        WHERE id = $1 AND user_id = $2
+        FOR UPDATE`, purchaseID, userID).Scan(purchaseArgs(&current)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domainErr.New(domainErr.ErrNotFound, "purchase not found", nil)
+	}
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to lock purchase for recovery", err)
+	}
+	if current.Status == model.StatusConfirmed {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, domainErr.New(domainErr.ErrInternal, "failed to commit recovered purchase", err)
+		}
+		return &current, nil
+	}
+	if current.Status != model.StatusExpired || current.TransactionHash == nil || strings.TrimSpace(*current.TransactionHash) == "" {
+		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_not_recoverable", "purchase is not an expired payment with a reserved transaction", nil)
+	}
+
+	var domainType string
+	var domainID uuid.UUID
+	err = tx.QueryRow(ctx, `
+        SELECT domain_type, domain_id
+        FROM consumed_nimiq_transactions
+        WHERE transaction_hash = $1
+        FOR UPDATE`, *current.TransactionHash).Scan(&domainType, &domainID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "transaction_not_reserved", "transaction hash is not reserved for this purchase", nil)
+	}
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to lock consumed transaction", err)
+	}
+	if domainType != nimiqtx.DomainEventPurchase || domainID != current.ID {
+		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "transaction_not_reserved", "transaction hash is not reserved for this purchase", nil)
+	}
+
+	if _, err := tx.Exec(ctx, `
+        UPDATE event_purchases
+        SET status = 'cancelled', updated_at = $3
+        WHERE event_id = $1 AND user_id = $2 AND id <> $4 AND status = 'pending'`,
+		current.EventID, userID, now, current.ID); err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to release replacement purchase hold", err)
+	}
+
+	var confirmed model.Purchase
+	if err := tx.QueryRow(ctx, `
+        UPDATE event_purchases
+        SET status = 'confirmed', capacity_hold_expires_at = NULL,
+            verification_claimed_until = NULL, confirmed_at = COALESCE(confirmed_at, $3), updated_at = $3
+        WHERE id = $1 AND user_id = $2 AND status = 'expired' AND transaction_hash IS NOT NULL
+        RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
+                  reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
+                  transaction_hash, created_at, updated_at, confirmed_at`,
+		purchaseID, userID, now).Scan(purchaseArgs(&confirmed)...); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_state_changed", "purchase recovery state changed", nil)
+		}
+		if isUniqueViolation(err) {
+			return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_state_conflict", "another active purchase already exists for this event", err)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to confirm recovered purchase", err)
+	}
+	if _, err := syncEventAttendeeCount(ctx, tx, confirmed.EventID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to commit recovered purchase", err)
+	}
+	return &confirmed, nil
+}
+
 // SetVerificationState applies only server-decided verification outcomes.
 func (r *PurchaseRepo) SetVerificationState(ctx context.Context, purchaseID, userID uuid.UUID, status model.Status, now time.Time) (*model.Purchase, error) {
 	if status != model.StatusVerifying && status != model.StatusConfirmed && status != model.StatusFailed {
 		return nil, domainErr.New(domainErr.ErrBadRequest, "invalid verification state", nil)
 	}
 
+	var eventID uuid.UUID
+	if err := r.db.QueryRow(ctx, "SELECT event_id FROM event_purchases WHERE id = $1 AND user_id = $2", purchaseID, userID).Scan(&eventID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErr.New(domainErr.ErrNotFound, "purchase not found", nil)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to read purchase event", err)
+	}
+
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to begin verification state transaction", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := tx.QueryRow(ctx, "SELECT id FROM events WHERE id = $1 FOR UPDATE", eventID).Scan(&eventID); err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to lock event for verification state", err)
+	}
+
 	var purchase model.Purchase
-	err := r.db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
         UPDATE event_purchases
-        SET status = $3,
-            capacity_hold_expires_at = NULL,
+        SET status = $3::text, capacity_hold_expires_at = NULL,
             verification_claimed_until = NULL,
-            confirmed_at = CASE WHEN $3 = 'confirmed' THEN COALESCE(confirmed_at, $4) ELSE confirmed_at END,
+            confirmed_at = CASE WHEN $3::text = 'confirmed' THEN COALESCE(confirmed_at, $4) ELSE confirmed_at END,
             updated_at = $4
-        WHERE id = $1 AND user_id = $2
-          AND status IN ('submitted', 'verifying')
+        WHERE id = $1 AND user_id = $2 AND status IN ('submitted', 'verifying')
         RETURNING id, event_id, user_id, amount_lunas, status, capacity_hold_expires_at,
                   reconciliation_deadline_at, last_verification_attempt_at, verification_claimed_until,
                   transaction_hash, created_at, updated_at, confirmed_at`,
 		purchaseID, userID, string(status), now).Scan(purchaseArgs(&purchase)...)
 	if err == nil {
+		if status == model.StatusConfirmed {
+			if _, syncErr := syncEventAttendeeCount(ctx, tx, purchase.EventID); syncErr != nil {
+				return nil, syncErr
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, domainErr.New(domainErr.ErrInternal, "failed to commit verification state", err)
+		}
 		return &purchase, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -383,6 +501,25 @@ func (r *PurchaseRepo) SetVerificationState(ctx context.Context, purchaseID, use
 		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_state_terminal", "purchase is already in a terminal state", nil)
 	}
 	return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_state_changed", "purchase verification state changed", nil)
+}
+
+func syncEventAttendeeCount(ctx context.Context, tx pgx.Tx, eventID uuid.UUID) (int, error) {
+	var count int
+	err := tx.QueryRow(ctx, `
+        UPDATE events
+        SET attendee_count = (
+            SELECT COUNT(*)::int FROM (
+                SELECT user_id FROM event_participants WHERE event_id = $1
+                UNION
+                SELECT user_id FROM event_purchases WHERE event_id = $1 AND status = 'confirmed'
+            ) effective_attendees
+        ), updated_at = NOW()
+        WHERE id = $1
+        RETURNING attendee_count`, eventID).Scan(&count)
+	if err != nil {
+		return 0, domainErr.New(domainErr.ErrInternal, "failed to synchronize attendee count", err)
+	}
+	return count, nil
 }
 
 func purchaseArgs(p *model.Purchase) []any {

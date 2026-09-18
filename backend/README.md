@@ -16,7 +16,8 @@ with domain code layered over the repository's clean/hexagonal foundation.
 
 The backend also retains tenant, workspace, RBAC, API-management, audit, and
 WebSocket infrastructure from the original platform. Those systems are not
-NIMNear product records and should not be documented as event/catalog data.
+NIMNear product records. In production they are disabled unless
+`NIMNEAR_PLATFORM_API_ENABLED=true`. See `docs/PRODUCT_BOUNDARIES.md`.
 
 ## Local development
 
@@ -34,8 +35,9 @@ The normal local API is http://localhost:8080.
 
 The readiness response checks PostgreSQL and Redis. Local Docker services and
 their credentials are development-only. make seed is an explicit RBAC
-bootstrap helper; startup and migrations do not create application events,
-places, calendars, profiles, purchases, tickets, or demo records.
+bootstrap helper; `make seed-dev-places` is an explicit fictional
+development-place helper. Startup and migrations do not create application
+events, places, calendars, profiles, purchases, tickets, or demo records.
 
 The latest migration is
 backend/internal/infrastructure/postgres/migrations/00023_payment_reconciliation.sql.
@@ -63,6 +65,12 @@ If enabled, these variables must be supplied together:
 - NIMNEAR_MERCHANT_ADDRESS
 - NIMNEAR_NIMIQ_RPC_URL
 
+Local `./dev.sh` defaults those three to TestAlbatross development values,
+including the public rate-limited endpoint `https://rpc.testnet.nimiqwatch.com`.
+`https://rpc.nimiqwatch.com` serves MainAlbatross and must not be used with the
+test-albatross development network. That public endpoint is not production RPC
+infrastructure.
+
 Production payment validation rejects obvious test/local network mixing,
 loopback/local RPC hosts, malformed addresses, and ambiguous network/RPC
 identifiers. No private key is accepted by configuration. Payment routing
@@ -72,13 +80,15 @@ The main settings loaded by backend/internal/shared/config/config.go are:
 
 | Area | Variables |
 | --- | --- |
-| Application/server | APP_ENV, SERVER_HOST, SERVER_PORT, SERVER_READ_TIMEOUT_SECONDS, SERVER_WRITE_TIMEOUT_SECONDS, SERVER_IDLE_TIMEOUT_SECONDS, CORS_ALLOWED_ORIGINS, MAX_BODY_BYTES |
+| Application/server | APP_ENV, SERVER_HOST, SERVER_PORT, SERVER_READ_TIMEOUT_SECONDS, SERVER_WRITE_TIMEOUT_SECONDS, SERVER_IDLE_TIMEOUT_SECONDS, CORS_ALLOWED_ORIGINS, MAX_BODY_BYTES, NIMNEAR_TRUSTED_PROXY_CIDRS |
+| Product/legacy surfaces | NIMNEAR_EMAIL_AUTH_ENABLED, NIMNEAR_PLATFORM_API_ENABLED, NIMNEAR_GATEWAY_TABLE_ALLOWLIST |
+| Payments | NIMNEAR_PURCHASE_HOLD_MINUTES, NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS, NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES, NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE, NIMNEAR_PURCHASE_CREATE_LIMIT, NIMNEAR_PURCHASE_SUBMIT_LIMIT, NIMNEAR_PURCHASE_RATE_LIMIT_WINDOW_SECONDS, plus the three Nimiq variables above |
 | PostgreSQL | DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE, DB_MAX_CONNS, DB_MIN_CONNS |
 | Redis | REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB |
 | JWT | JWT_SECRET, JWT_EXPIRATION_HOURS, JWT_ISSUER |
 | Kafka | KAFKA_BROKERS, KAFKA_GROUP_ID, KAFKA_ENABLED, KAFKA_NUM_PARTITIONS, KAFKA_REPLICATION_FACTOR |
 | WebSocket | WS_ENABLED, WS_MAX_CONNECTIONS, WS_PING_INTERVAL_SECONDS, WS_READ_BUFFER_SIZE, WS_WRITE_BUFFER_SIZE |
-| Payments | NIMNEAR_PURCHASE_HOLD_MINUTES, NIMNEAR_PURCHASE_RECONCILIATION_INTERVAL_SECONDS, NIMNEAR_PURCHASE_RECONCILIATION_DEADLINE_MINUTES, NIMNEAR_PURCHASE_RECONCILIATION_BATCH_SIZE, plus the three Nimiq variables above |
+| Nimiq auth | NIMNEAR_AUTH_NETWORK, NIMNEAR_AUTH_ENVIRONMENT, NIMNEAR_AUTH_DOMAIN, NIMNEAR_AUTH_CHALLENGE_TTL_SECONDS, NIMNEAR_AUTH_COOKIE_NAME, NIMNEAR_AUTH_COOKIE_SECURE, NIMNEAR_AUTH_COOKIE_SAME_SITE, NIMNEAR_AUTH_CHALLENGE_IP_LIMIT, NIMNEAR_AUTH_VERIFY_IP_LIMIT, NIMNEAR_AUTH_VERIFY_ABUSE_LIMIT, NIMNEAR_AUTH_RATE_LIMIT_WINDOW_SECONDS |
 | Logging | LOG_LEVEL, LOG_FORMAT |
 
 Validation errors identify configuration variable names only; they do not print
@@ -90,9 +100,13 @@ secret values or full connection strings.
 
 - GET /health/live
 - GET /health/ready
-- GET /metrics
-- POST /api/v1/auth/register — legacy email/password registration.
-- POST /api/v1/auth/login — legacy email/password login and JWT issuance.
+- GET /metrics — registered only when `NIMNEAR_METRICS_ENABLED=true` and `NIMNEAR_METRICS_PUBLIC=true`. Production default: not public.
+- POST /api/v1/auth/register — legacy email/password registration. Production default: disabled.
+- POST /api/v1/auth/login — browser cookie session; JSON is `{ "user": ... }` only. Production default: disabled.
+- POST /api/v1/auth/token — explicit Bearer JWT issuance for non-browser API clients. Production default: disabled.
+- POST /api/v1/auth/logout — clears the HttpOnly session cookie.
+- POST /api/v1/auth/nimiq/challenges — Nimiq AUTH_LOGIN challenge.
+- POST /api/v1/auth/nimiq/verify — verifies the wallet signature and sets the session cookie.
 - GET /api/v1/places/nearby?lat={lat}&lng={lng}&radius={meters}
 - GET /api/v1/places/{id}
 - GET /api/v1/events
@@ -112,11 +126,17 @@ radius at 50 km, and return active places nearest-first.
 
 ### JWT-protected NIMNear operations
 
+Protected NIMNear routes accept the HttpOnly session cookie or a Bearer JWT.
+The Mini App uses the cookie.
+
 - GET /api/v1/me
 - PATCH /api/v1/me/profile
+- DELETE /api/v1/me — anonymize/deactivate the current user; see docs/ACCOUNT_DELETION.md
 - POST /api/v1/events
 - GET /api/v1/me/calendars
 - POST /api/v1/calendars
+- PATCH /api/v1/calendars/{id}
+- POST /api/v1/calendars/{id}/archive
 - POST /api/v1/calendars/{id}/follow
 - DELETE /api/v1/calendars/{id}/follow
 - GET /api/v1/events/{id}/rsvp
@@ -127,11 +147,14 @@ radius at 50 km, and return active places nearest-first.
 - GET /api/v1/purchases/{id}
 - GET /api/v1/purchases/{id}/payment-instructions
 - POST /api/v1/purchases/{id}/transaction
+- POST /api/v1/purchases/{id}/reverify
+- POST /api/v1/payment-requests/{public_id}/reverify
 - GET /api/v1/ws?token=<jwt>
 
-The existing tenant/RBAC/API-management routes are also protected and remain
-available for the platform foundation. They are separate from the NIMNear
-public domain routes.
+The existing tenant/RBAC/API-management routes are leftover MasterFabric
+platform APIs. They are disabled in production by default and are separate
+from the NIMNear product. Place inventory is operator-managed; see
+`docs/PLACES_OPERATIONS.md` and `docs/PRODUCT_BOUNDARIES.md`.
 
 ## Domain contract
 
@@ -168,12 +191,13 @@ The current paid flow is:
       -> macro-block finality
       -> confirmed
 
-The verifier checks transaction lookup, exact recipient and amount, basic
-transfer fields, execution result, containing block/network, inclusion, and
-later-batch finality. A reconciliation worker retries submitted/verifying
-purchases with a bounded deterministic batch and deadline. The same owner/hash
-submission is idempotent and a unique database index prevents cross-purchase
-hash replay. Submitted/verifying purchases remain capacity-protected.
+The verifier checks transaction lookup, exact recipient and amount, RPC sender
+against the purchaser's verified Nimiq identities, basic transfer fields,
+execution result, containing block/network, inclusion, and later-batch
+finality. A reconciliation worker retries submitted/verifying purchases with a
+bounded deterministic batch and deadline. The same owner/hash submission is
+idempotent and a unique database index prevents cross-purchase hash replay.
+Submitted/verifying purchases remain capacity-protected.
 
 The current recipient is NIMNEAR_MERCHANT_ADDRESS. Verified organizer identity,
 organizer recipient snapshots, entitlements, tickets, QR/check-in, refunds,
@@ -182,18 +206,23 @@ handle private keys.
 
 ## Authentication boundary
 
-Native Nimiq Pay connection is implemented in the frontend through explicit
-init() -> listAccounts() interaction and native approval UI. It is account
-permission, not cryptographic backend authentication. The official Mini App
-signature preimage and multi-account signer contract remain unresolved in
-docs/NIMIQ_AUTH_CONTRACT.md; that document is intentionally NO-GO. Legacy
-email/password/JWT infrastructure therefore remains in the backend and is still
-required by protected endpoints.
+Nimiq wallet authentication is implemented for Testnet. Challenge/verify
+endpoints issue an HttpOnly session cookie and return `{ "user": ... }` only.
+Mini App requests use `credentials: include` and do not persist a JWT.
+`POST /api/v1/auth/token` issues a Bearer JWT for non-browser API clients.
+See docs/NIMIQ_AUTH_IMPLEMENTATION.md and docs/NIMIQ_RPC.md. Device identifiers,
+RPC WebSocket listeners, generic payments, transaction history, and deep links
+are not implemented.
 
 ## Testing
 
     go test ./...
     go vet ./...
+
+Destructive PostgreSQL tests require an isolated `*_test` database:
+
+    NIMNEAR_TEST_DATABASE_URL=postgres://nimnear:nimnear@localhost:5432/nimnear_test?sslmode=disable \
+      make test-postgres
 
 For frontend validation, see frontend/web/README.md. Manual Postman
 collections are request tooling only; they are not startup seeds.

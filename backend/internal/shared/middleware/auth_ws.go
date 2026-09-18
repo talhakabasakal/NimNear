@@ -5,12 +5,11 @@ import (
 	"strings"
 )
 
-// ExtractBearerToken returns a JWT from the query ?token= parameter or Authorization header.
-// WebSocket browser clients typically cannot set Authorization headers, so query param is supported.
+// ExtractBearerToken returns a JWT from the Authorization header only.
+// Query-string tokens are rejected because they leak through logs, history,
+// proxies, and observability systems. Browser WebSocket clients authenticate
+// with the HttpOnly session cookie; non-browser clients use Authorization.
 func ExtractBearerToken(r *http.Request) string {
-	if token := strings.TrimSpace(r.URL.Query().Get("token")); token != "" {
-		return token
-	}
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return ""

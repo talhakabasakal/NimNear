@@ -30,3 +30,16 @@ func ValidMediaURL(value string) bool {
 	scheme := strings.ToLower(parsed.Scheme)
 	return scheme == "http" || scheme == "https"
 }
+
+// ValidHTTPSMediaURL accepts an absent URL or an absolute HTTPS URL that
+// already satisfies ValidMediaURL. HTTP is rejected.
+func ValidHTTPSMediaURL(value string) bool {
+	if value == "" {
+		return true
+	}
+	if !ValidMediaURL(value) {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	return err == nil && parsed != nil && strings.EqualFold(parsed.Scheme, "https")
+}

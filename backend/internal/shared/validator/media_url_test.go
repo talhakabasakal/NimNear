@@ -32,3 +32,15 @@ func TestValidMediaURL(t *testing.T) {
 		})
 	}
 }
+
+func TestValidHTTPSMediaURL(t *testing.T) {
+	if !ValidHTTPSMediaURL("") {
+		t.Fatal("empty URL must be allowed")
+	}
+	if !ValidHTTPSMediaURL("https://media.example/place.jpg") {
+		t.Fatal("https URL must be allowed")
+	}
+	if ValidHTTPSMediaURL("http://media.example/place.jpg") {
+		t.Fatal("http URL must be rejected for place media")
+	}
+}

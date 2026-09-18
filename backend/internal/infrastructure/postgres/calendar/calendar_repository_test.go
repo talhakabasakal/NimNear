@@ -1,32 +1,22 @@
 package calendar
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	calendarmodel "github.com/masterfabric-go/masterfabric/internal/domain/calendar/model"
+	"github.com/masterfabric-go/masterfabric/internal/infrastructure/postgres/testdb"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 )
 
 func testCalendarDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("NIMNEAR_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("NIMNEAR_TEST_DATABASE_URL is not set")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("connect test database: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if err := pool.Ping(context.Background()); err != nil {
-		t.Fatalf("ping test database: %v", err)
-	}
-	return pool
+	return testdb.Open(t)
 }
 
 func TestCalendarRepositoryPublicIsolationAndDeterministicOrdering(t *testing.T) {
@@ -71,8 +61,12 @@ func TestCalendarRepositoryPublicIsolationAndDeterministicOrdering(t *testing.T)
 	if _, ok := positions[archivedID]; ok {
 		t.Fatal("archived calendar leaked into public list")
 	}
-	if positions[publicID] >= positions[secondPublicID] && publicID != secondPublicID {
-		t.Fatalf("same-timestamp public calendars were not ordered by id: %v >= %v", positions[publicID], positions[secondPublicID])
+	wantFirst, wantSecond := publicID, secondPublicID
+	if bytes.Compare(secondPublicID[:], publicID[:]) < 0 {
+		wantFirst, wantSecond = secondPublicID, publicID
+	}
+	if positions[wantFirst] >= positions[wantSecond] {
+		t.Fatalf("same-timestamp public calendars were not ordered by id: %v >= %v", positions[wantFirst], positions[wantSecond])
 	}
 
 	if _, err := repo.GetPublicByID(ctx, privateID); err == nil || !errors.Is(err, domainErr.ErrNotFound) {
@@ -86,7 +80,7 @@ func TestCalendarRepositoryPublicIsolationAndDeterministicOrdering(t *testing.T)
 	for _, calendar := range owned {
 		ownedIDs[calendar.ID] = true
 	}
-	if !ownedIDs[privateID] || !ownedIDs[publicID] {
+	if !ownedIDs[privateID] || !ownedIDs[publicID] || !ownedIDs[archivedID] {
 		t.Fatalf("owner calendars missing: %v", ownedIDs)
 	}
 	otherOwned, err := repo.ListOwned(ctx, otherOwnerID)
@@ -133,5 +127,51 @@ func TestCalendarRepositoryFollowAndUnfollowAreIdempotent(t *testing.T) {
 	}
 	if err := repo.Unfollow(ctx, calendarID, followerID); err != nil {
 		t.Fatalf("second unfollow: %v", err)
+	}
+}
+
+func TestCalendarRepositoryOwnerUpdateAndArchiveRejectNonOwner(t *testing.T) {
+	pool := testdb.Open(t)
+	ctx := context.Background()
+	repo := NewCalendarRepo(pool)
+	ownerID, otherID, calendarID := uuid.New(), uuid.New(), uuid.New()
+	for _, id := range []uuid.UUID{ownerID, otherID} {
+		if _, err := pool.Exec(ctx, "INSERT INTO users (id, email) VALUES ($1, $2)", id, id.String()+"@calendar-owner-test.local"); err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO calendars (id, name, owner_id, visibility, status) VALUES ($1, 'Editable', $2, 'public', 'active')`, calendarID, ownerID); err != nil {
+		t.Fatalf("insert calendar: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM calendars WHERE id = $1", calendarID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = ANY($1)", []uuid.UUID{ownerID, otherID})
+	})
+	now := time.Now().UTC()
+	namePatch := func(name string) calendarmodel.Patch {
+		return calendarmodel.Patch{NameSet: true, Name: name}
+	}
+	updated, err := repo.UpdateOwned(ctx, calendarID, ownerID, namePatch("Owner calendar"), now)
+	if err != nil || updated.Name != "Owner calendar" {
+		t.Fatalf("owner update = %+v err=%v", updated, err)
+	}
+	if _, err := repo.UpdateOwned(ctx, calendarID, otherID, namePatch("Hijacked"), now); err == nil || !errors.Is(err, domainErr.ErrNotFound) {
+		t.Fatalf("non-owner update error = %v, want not found", err)
+	}
+	if err := repo.Follow(ctx, calendarID, otherID); err != nil {
+		t.Fatalf("follow: %v", err)
+	}
+	if _, err := repo.UpdateOwned(ctx, calendarID, otherID, namePatch("Follower edit"), now); err == nil || !errors.Is(err, domainErr.ErrNotFound) {
+		t.Fatalf("follower update error = %v, want not found", err)
+	}
+	archived, err := repo.ArchiveOwned(ctx, calendarID, ownerID, now)
+	if err != nil || string(archived.Status) != "archived" {
+		t.Fatalf("owner archive = %+v err=%v", archived, err)
+	}
+	if _, err := repo.ArchiveOwned(ctx, calendarID, otherID, now); err == nil || !errors.Is(err, domainErr.ErrNotFound) {
+		t.Fatalf("non-owner archive error = %v, want not found", err)
+	}
+	if _, err := repo.GetPublicByID(ctx, calendarID); err == nil || !errors.Is(err, domainErr.ErrNotFound) {
+		t.Fatalf("archived calendar remained public: %v", err)
 	}
 }

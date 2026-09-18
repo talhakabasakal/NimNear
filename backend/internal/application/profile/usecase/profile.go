@@ -185,6 +185,7 @@ func mapProfile(profile *model.PublicProfile) profiledto.PublicProfileInfo {
 		Username:            profile.Username,
 		Bio:                 optionalNonEmptyString(profile.Bio),
 		AvatarURL:           optionalMediaURL(profile.AvatarURL),
+		WalletAddress:       optionalNonEmptyString(profile.WalletAddress),
 		JoinedAt:            profile.JoinedAt,
 		OrganizedEventCount: profile.OrganizedEventCount,
 		AttendedEventCount:  profile.AttendedEventCount,

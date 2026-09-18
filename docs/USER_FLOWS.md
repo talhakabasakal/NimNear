@@ -10,10 +10,10 @@ Do not infer missing screens or hidden transitions from this document. The Istan
 
 The following screens are confirmed in Figma:
 
-- `Keşfet`
+- `Discover`
 - `Etkinlikler`
-- `Takvimler`
-- `Etkinlik oluştur`
+- `Calendars`
+- `Create event`
 - `Profil`
 - İstanbul city detail page
 
@@ -24,20 +24,20 @@ Checkout, processing, and success frames were mentioned in Figma Make history bu
 The confirmed shared navigation contains:
 
 - `Etkinlikler`
-- `Takvimler`
-- `Keşfet`
-- `Etkinlik oluştur`
+- `Calendars`
+- `Discover`
+- `Create event`
 - Profile/avatar access
 - Theme toggle and notifications controls
 
-The `Keşfet` screen exposes location-driven place cards after the user explicitly shares location. Each real place card leads to `/places/{id}`. The Figma İstanbul city-detail composition remains a visual reference; a city taxonomy/subscription surface is not implemented. A footer also exposes `Keşfet`, `Fiyatlandırma`, `Yardım`, and `Uygulamayı İndir` controls.
+The `Discover` screen exposes location-driven place cards after the user explicitly shares location. Each real place card leads to `/places/{id}`. The Figma İstanbul city-detail composition remains a visual reference; a city taxonomy/subscription surface is not implemented. A footer also exposes `Discover`, `Pricing`, `Help`, and `Download the app` controls.
 
-## Keşfet
+## Discover
 
 Confirmed visible hierarchy:
 
 1. Istanbul panorama hero with nearby context and event summary.
-2. Upcoming events section with event cards and a `Tümünü Görüntüle` action.
+2. Upcoming events section with event cards and a `View all` action.
 3. Category grid.
 4. Featured community calendars with `Takip et` actions.
 5. Regional tabs.
@@ -50,27 +50,27 @@ The implemented discovery path uses backend active places and stable place IDs a
 Confirmed visible hierarchy:
 
 1. Istanbul image strip and `Etkinlikler` heading.
-2. `Yaklaşan` and `Geçmiş` controls.
+2. `Upcoming` and `Past` controls.
 3. Date-grouped event timeline.
 4. Event cards showing time, title, organizer, location, availability/status, price, attendance count, and image.
 
-The visible event states include `Davetli`, `Ücretsiz`, `Tükendi`, and NIM-priced events. No event detail or checkout transition was confirmed.
+The visible event states include `Invited`, `Free`, `Sold out`, and NIM-priced events. No event detail or checkout transition was confirmed.
 
-## Takvimler
+## Calendars
 
 Confirmed visible hierarchy:
 
-1. Welcome/onboarding card with `İleri`.
-2. `Takvimlerim` section with `Oluştur` and an empty state.
-3. `Takip edilenler` section with an empty state.
+1. Welcome/onboarding card with `Next`.
+2. `My calendars` section with `Create` and an empty state.
+3. `Following` section with an empty state.
 
-The implemented `/calendars` route uses real public calendar records, with explicit loading, empty, error, and not-found states. `/calendars/[id]` reads the active public calendar and its published/public associated events. `Takvimlerim` and `Takip edilenler` use the existing JWT-protected `/api/v1/me/calendars` endpoint. Calendar creation and follow/unfollow are protected by the legacy JWT; a native Nimiq connection without a verified backend session is clearly blocked.
+The implemented `/calendars` route uses real public calendar records, with explicit loading, empty, error, and not-found states. `/calendars/[id]` reads the active public calendar and its published/public associated events. `My calendars` and `Following` use the existing JWT-protected `/api/v1/me/calendars` endpoint. Calendar creation and follow/unfollow are protected by the legacy JWT; a native Nimiq connection without a verified backend session is clearly blocked.
 
-## Etkinlik oluştur
+## Create event
 
 Figma-confirmed controls include event name, landscape/theme, calendar visibility,
 start/end date-time, location, description, ticket price, approval, capacity,
-and the `Etkinlik oluştur` action.
+and the `Create event` action.
 
 The current supported implementation persists event name, description,
 start/end timestamps, city, optional image URL, optional owned calendar,
@@ -99,7 +99,7 @@ Confirmed visible hierarchy:
 1. Avatar, name, handle, bio, and join date.
 2. Organized/attended statistics.
 3. Empty public-event state.
-4. `İlk etkinliğini oluştur` action.
+4. `Create your first event` action.
 
 The existing profile read flow is Figma-confirmed. Profile editing is implemented as a restrained inferred flow because no matching edit frame was confirmed in the inspected Figma Make file.
 
@@ -107,7 +107,7 @@ The existing profile read flow is Figma-confirmed. Profile editing is implemente
 
 The implemented location flow is explicit and does not claim an implicit city:
 
-1. User chooses `Konumumu kullan`.
+1. User chooses `Use my location`.
 2. Browser/WebView geolocation permission is requested.
 3. Granted coordinates are used only for the bounded nearby-place request.
 4. Denied, unsupported, timeout, backend-error, and no-nearby-place states are shown distinctly.
@@ -134,12 +134,12 @@ Do not add routes, tabs, or transitions for these flows based only on the mentio
 
 The implemented event detail page supports the following backend-confirmed behavior:
 
-- Free upcoming events expose Katıl for authenticated users.
+- Free upcoming events expose Join for authenticated users.
 - Users with an existing backend JWT can participate. A native Nimiq connection without that JWT is shown as a blocked protected action; listAccounts() is not treated as authentication.
-- An attending user sees the attending state and can choose Katılımı iptal et.
-- Capacity-limited events show the current count and a disabled Tükendi state when full.
+- An attending user sees the attending state and can choose Cancel attendance.
+- Capacity-limited events show the current count and a disabled Sold out state when full.
 - Past events do not expose an RSVP action.
-- Paid upcoming events show the price and an authenticated Satın al action. The action opens Nimiq Pay, submits the returned transaction hash, and shows submitted/verifying until backend finality confirms the purchase.
+- Paid upcoming events show the price and an authenticated Purchase action. The action opens Nimiq Pay, submits the returned transaction hash, and shows submitted/verifying until backend finality confirms the purchase.
 
 Participation is user-specific and does not imply invitations, payments, tickets, QR codes, notifications, or waitlists. Calendar ownership/follow state is a separate backend domain.
 
@@ -155,21 +155,21 @@ The confirmed Profile screen is now connected to the first backend profile read 
 4. Public profiles are available at /profiles/[id] when linked from an event organizer block.
 5. Organized and attended lists use empty and API error states when no records or data are available.
 
-Profile editing is available only to the authenticated owner at `/profile/edit`. The inferred flow edits display name, username, and bio, then returns to `/profile` after a successful PATCH. Public profiles remain read-only. Email and authentication metadata are not part of public profile presentation.
+Profile editing is available only to the authenticated owner, inline on `/profile`. The flow edits display name, username, and bio through `PATCH /api/v1/me/profile`. The same screen offers logout and a confirmation-gated account deletion action. Public profiles remain read-only. Email and authentication metadata are not part of public profile presentation.
 
 ## Paid-event payment flow
 
 The implemented paid-event flow stops after confirmed purchase:
 
-1. An upcoming paid event shows Satın al; past and sold-out events do not offer a purchase action.
+1. An upcoming paid event shows Purchase; past and sold-out events do not offer a purchase action.
 2. A native-only user can connect Nimiq Pay, but the protected purchase remains unavailable until the verified Nimiq-to-JWT bridge exists; an existing backend JWT is required.
 3. An authenticated user creates or reuses a server-owned pending purchase.
 4. The frontend retrieves backend-authoritative recipient, exact Luna amount, and network.
 5. Nimiq Pay requests user confirmation through sendBasicTransaction.
 6. Wallet rejection is a normal retryable state and leaves the purchase pending.
 7. The wallet hash is submitted to the authenticated transaction endpoint.
-8. The event detail shows İşlem ağa gönderildi / Ödeme doğrulanıyor while the backend checks RPC inclusion and macro finality.
-9. Only a server-confirmed finalized transfer shows Ödeme doğrulandı.
+8. The event detail shows Transaction submitted to the network / Payment is being verified while the backend checks RPC inclusion and macro finality.
+9. Only a server-confirmed finalized transfer shows Payment verified.
 10. Reopening the event recovers the persisted purchase state.
 11. If the backend cannot conclusively verify the transfer before the configured reconciliation deadline, the purchase becomes expired and the UI does not show payment success or a ticket.
 

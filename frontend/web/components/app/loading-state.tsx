@@ -1,6 +1,6 @@
 export function LoadingState({ count = 3 }: { count?: number }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Yükleniyor">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Loading">
       {Array.from({ length: count }, (_, index) => (
         <div key={index} className="overflow-hidden rounded-xl border border-border bg-surface">
           <div className="h-36 animate-pulse bg-surface-hover" />

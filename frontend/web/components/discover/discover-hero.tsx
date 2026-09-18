@@ -20,12 +20,12 @@ export function DiscoverHero({ eventCount, hasError = false }: DiscoverHeroProps
       </div>
 
       <div className="max-w-lg">
-        <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-[11px] font-medium text-accent"><Sparkles size={13} /> NIMNear keşif</span>
-        <h1 className="max-w-md text-3xl font-semibold leading-[1.05] tracking-[-0.04em] text-white sm:text-[42px]">Güzel anları keşfet.</h1>
-        <p className="mt-4 max-w-sm text-sm leading-6 text-white/65">Topluluk etkinliklerini ve yeni buluşmaları tek yerde keşfet.</p>
+        <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1.5 text-[11px] font-medium text-accent"><Sparkles size={13} /> NIMNear discovery</span>
+        <h1 className="max-w-md text-3xl font-semibold leading-[1.05] tracking-[-0.04em] text-white sm:text-[42px]">Discover beautiful moments.</h1>
+        <p className="mt-4 max-w-sm text-sm leading-6 text-white/65">Discover community events and new meetups in one place.</p>
         <div className="mt-7 flex flex-wrap items-center gap-3">
-          <Link href="/events" className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary/90">Etkinlikleri keşfet <ArrowRight size={15} /></Link>
-          <span className="inline-flex items-center gap-2 text-xs text-white/60"><MapPin size={14} />{hasError ? "Etkinlik servisi bekleniyor" : eventCount + " yaklaşan etkinlik"}</span>
+          <Link href="/events" className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary/90">Explore events <ArrowRight size={15} /></Link>
+          <span className="inline-flex items-center gap-2 text-xs text-white/60"><MapPin size={14} />{hasError ? "Waiting for event service" : eventCount + " upcoming events"}</span>
         </div>
       </div>
     </section>

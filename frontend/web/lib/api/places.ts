@@ -1,4 +1,5 @@
 import { apiBaseUrl } from "./events";
+import { userFacingApiMessage } from "./http-error";
 
 export type PlaceRecord = {
   id: string;
@@ -28,7 +29,14 @@ export class PlacesApiError extends Error {
 
 async function throwPlacesApiError(response: Response): Promise<never> {
   const payload = (await response.json().catch(() => null)) as PlaceErrorPayload | null;
-  throw new PlacesApiError(response.status, payload?.message ?? payload?.error ?? "Places API returned " + response.status);
+  throw new PlacesApiError(
+    response.status,
+    userFacingApiMessage(
+      response.status,
+      payload?.message ?? payload?.error,
+      "Places could not be loaded.",
+    ),
+  );
 }
 
 export async function fetchNearbyPlaces(input: { latitude: number; longitude: number; radius?: number }): Promise<NearbyPlaceRecord[]> {

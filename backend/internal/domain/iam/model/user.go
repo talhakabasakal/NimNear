@@ -23,6 +23,7 @@ type User struct {
 	FirstName    string     `json:"first_name"`
 	LastName     string     `json:"last_name"`
 	Status       UserStatus `json:"status"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
@@ -37,5 +38,10 @@ func (u *User) FullName() string {
 
 // IsActive checks if the user account is active.
 func (u *User) IsActive() bool {
-	return u.Status == UserStatusActive
+	return u != nil && u.Status == UserStatusActive && u.DeletedAt == nil
+}
+
+// IsDeleted reports whether the account has been anonymized and deactivated.
+func (u *User) IsDeleted() bool {
+	return u != nil && u.DeletedAt != nil
 }

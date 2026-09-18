@@ -1,19 +1,44 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark;
   --background: #0f0e10;
   --foreground: #ffffff;
   --surface: #1a1920;
   --surface-hover: #201f29;
   --border: #252430;
   --border-faint: #3d3b4d;
-  --muted: #8b8a97;
+  --muted: #9c9ba8;
   --accent: #d7a6ff;
   --primary: #8277ff;
   --primary-foreground: #ffffff;
   --ring: #a49cff;
   --avatar: #5b5af7;
   --radius: 0.75rem;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: #f8f7fb;
+  --foreground: #17151f;
+  --surface: #ffffff;
+  --surface-hover: #f0eef6;
+  --border: #dedbe8;
+  --border-faint: #c7c2d4;
+  --muted: #666272;
+  --accent: #7445a4;
+  --primary: #675be7;
+  --primary-foreground: #ffffff;
+  --ring: #675be7;
+  --avatar: #5b5af7;
+}
+
+:root[data-theme="light"] .text-red-200 {
+  color: #b42318;
+}
+
+:root[data-theme="light"] .text-red-100 {
+  color: #912018;
 }
 
 @theme inline {
@@ -45,6 +70,7 @@ body {
   color: var(--foreground);
   font-family: "Instrument Sans", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 160ms ease, color 160ms ease;
 }
 
 a,
@@ -55,4 +81,70 @@ button {
 ::selection {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
   color: var(--foreground);
+}
+
+
+/* The event editor owns its visual canvas so a selected event theme is visible
+   across the page, while the rest of the app continues to use the global theme. */
+html[data-event-page="true"] body {
+  background: var(--event-background, var(--background));
+}
+
+html[data-event-page="true"] .event-create-header {
+  border-color: color-mix(in srgb, var(--event-line) 72%, transparent);
+  background: color-mix(in srgb, var(--event-background-strong) 88%, transparent);
+}
+
+html[data-event-page="true"] .event-create-header .text-muted,
+html[data-event-page="true"] .event-create-header button {
+  color: var(--event-muted);
+}
+
+html[data-event-page="true"] .event-create-header .text-foreground {
+  color: var(--event-foreground);
+}
+
+html[data-event-page="true"] .event-create-header a:hover,
+html[data-event-page="true"] .event-create-header button:hover {
+  background: color-mix(in srgb, var(--event-panel) 72%, transparent);
+  color: var(--event-foreground);
+}
+
+.create-event-shell {
+  background: var(--event-background);
+  color: var(--event-foreground);
+  transition: background-color 220ms ease, color 160ms ease;
+}
+
+.create-event-panel {
+  border-color: color-mix(in srgb, var(--event-line) 76%, transparent);
+  background: color-mix(in srgb, var(--event-panel) 92%, transparent);
+  transition: background-color 220ms ease, border-color 220ms ease;
+}
+
+.create-event-shell input::placeholder,
+.create-event-shell textarea::placeholder {
+  color: color-mix(in srgb, var(--event-muted) 72%, transparent);
+}
+
+.create-event-shell input:focus,
+.create-event-shell textarea:focus,
+.create-event-shell select:focus {
+  border-color: var(--event-accent);
+  --tw-ring-color: color-mix(in srgb, var(--event-accent) 32%, transparent);
+}
+
+.create-event-shell input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.7);
+}
+
+.create-event-shell details summary::-webkit-details-marker {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-event-shell,
+  .create-event-panel {
+    transition: none;
+  }
 }

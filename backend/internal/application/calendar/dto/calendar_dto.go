@@ -14,6 +14,7 @@ type CalendarInfo struct {
 	Description *string   `json:"description"`
 	ImageURL    *string   `json:"image_url"`
 	Visibility  string    `json:"visibility"`
+	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -24,6 +25,18 @@ type CreateCalendarRequest struct {
 	Description string `json:"description"`
 	ImageURL    string `json:"image_url"`
 	Visibility  string `json:"visibility"`
+}
+
+// UpdateCalendarRequest contains only fields allowed by PATCH /api/v1/calendars/{id}.
+type UpdateCalendarRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	ImageURL    *string `json:"image_url"`
+	Visibility  *string `json:"visibility"`
+}
+
+func (r UpdateCalendarRequest) Empty() bool {
+	return r.Name == nil && r.Description == nil && r.ImageURL == nil && r.Visibility == nil
 }
 
 // CalendarsResponse is a public calendar collection.

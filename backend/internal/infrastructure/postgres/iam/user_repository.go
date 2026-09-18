@@ -44,9 +44,9 @@ func (r *UserRepo) Create(ctx context.Context, user *model.User) error {
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var u model.User
 	err := r.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, first_name, last_name, status, created_at, updated_at
+		`SELECT id, COALESCE(email, ''), COALESCE(password_hash, ''), COALESCE(first_name, ''), COALESCE(last_name, ''), status, deleted_at, created_at, updated_at
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName, &u.Status, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName, &u.Status, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErr.New(domainErr.ErrNotFound, "user not found", nil)
@@ -59,9 +59,9 @@ func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, erro
 func (r *UserRepo) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	var u model.User
 	err := r.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, first_name, last_name, status, created_at, updated_at
+		`SELECT id, COALESCE(email, ''), COALESCE(password_hash, ''), COALESCE(first_name, ''), COALESCE(last_name, ''), status, deleted_at, created_at, updated_at
 		 FROM users WHERE email = $1`, email,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName, &u.Status, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName, &u.Status, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domainErr.New(domainErr.ErrNotFound, "user not found", nil)
@@ -99,7 +99,7 @@ func (r *UserRepo) List(ctx context.Context, offset, limit int) ([]*model.User, 
 	}
 
 	rows, err := r.db.Query(ctx,
-		`SELECT id, email, password_hash, first_name, last_name, status, created_at, updated_at
+		`SELECT id, COALESCE(email, ''), COALESCE(password_hash, ''), COALESCE(first_name, ''), COALESCE(last_name, ''), status, deleted_at, created_at, updated_at
 		 FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset,
 	)
 	if err != nil {
@@ -110,7 +110,7 @@ func (r *UserRepo) List(ctx context.Context, offset, limit int) ([]*model.User, 
 	var users []*model.User
 	for rows.Next() {
 		var u model.User
-		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName, &u.Status, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FirstName, &u.LastName, &u.Status, &u.DeletedAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, 0, domainErr.New(domainErr.ErrInternal, "failed to scan user", err)
 		}
 		users = append(users, &u)

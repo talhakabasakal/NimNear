@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -140,4 +142,138 @@ func (r *PlaceRepo) GetActiveByID(ctx context.Context, id uuid.UUID) (*model.Pla
 		return nil, domainErr.New(domainErr.ErrInternal, "failed to get place", err)
 	}
 	return &place, nil
+}
+
+const placeSelectColumns = `id, name, description, latitude, longitude, address, category, image_url,
+		       is_active, created_at, updated_at`
+
+// Create inserts an operator-managed place. A preset ID is preserved for
+// deterministic development seeds.
+func (r *PlaceRepo) Create(ctx context.Context, place *model.Place) error {
+	if place.ID == uuid.Nil {
+		place.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	if place.CreatedAt.IsZero() {
+		place.CreatedAt = now
+	}
+	place.UpdatedAt = now
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO places (id, name, description, latitude, longitude, address, category, image_url, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		place.ID, place.Name, place.Description, place.Latitude, place.Longitude, place.Address, place.Category, place.ImageURL, place.IsActive, place.CreatedAt, place.UpdatedAt,
+	)
+	if err != nil {
+		return domainErr.New(domainErr.ErrInternal, "failed to create place", err)
+	}
+	return nil
+}
+
+// Update persists an operator patch, including inactive records.
+func (r *PlaceRepo) Update(ctx context.Context, place *model.Place) error {
+	place.UpdatedAt = time.Now().UTC()
+	tag, err := r.db.Exec(ctx, `
+		UPDATE places
+		SET name = $1, description = $2, latitude = $3, longitude = $4, address = $5,
+		    category = $6, image_url = $7, is_active = $8, updated_at = $9
+		WHERE id = $10`,
+		place.Name, place.Description, place.Latitude, place.Longitude, place.Address, place.Category, place.ImageURL, place.IsActive, place.UpdatedAt, place.ID,
+	)
+	if err != nil {
+		return domainErr.New(domainErr.ErrInternal, "failed to update place", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domainErr.New(domainErr.ErrNotFound, "place not found", nil)
+	}
+	return nil
+}
+
+// GetByID returns a place regardless of active state.
+func (r *PlaceRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Place, error) {
+	var place model.Place
+	err := r.db.QueryRow(ctx, `
+		SELECT `+placeSelectColumns+`
+		FROM places
+		WHERE id = $1`, id).Scan(
+		&place.ID,
+		&place.Name,
+		&place.Description,
+		&place.Latitude,
+		&place.Longitude,
+		&place.Address,
+		&place.Category,
+		&place.ImageURL,
+		&place.IsActive,
+		&place.CreatedAt,
+		&place.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domainErr.New(domainErr.ErrNotFound, "place not found", nil)
+		}
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to get place", err)
+	}
+	return &place, nil
+}
+
+// List returns operator inventory including inactive places.
+func (r *PlaceRepo) List(ctx context.Context, limit int) ([]*model.Place, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT `+placeSelectColumns+`
+		FROM places
+		ORDER BY name ASC, id ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to list places", err)
+	}
+	defer rows.Close()
+	return scanPlaces(rows)
+}
+
+// ListByName returns places whose trimmed name matches case-insensitively.
+func (r *PlaceRepo) ListByName(ctx context.Context, name string, limit int) ([]*model.Place, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT `+placeSelectColumns+`
+		FROM places
+		WHERE LOWER(name) = LOWER($1)
+		ORDER BY created_at ASC, id ASC
+		LIMIT $2`, strings.TrimSpace(name), limit)
+	if err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to list places by name", err)
+	}
+	defer rows.Close()
+	return scanPlaces(rows)
+}
+
+func scanPlaces(rows pgx.Rows) ([]*model.Place, error) {
+	places := make([]*model.Place, 0)
+	for rows.Next() {
+		var place model.Place
+		if err := rows.Scan(
+			&place.ID,
+			&place.Name,
+			&place.Description,
+			&place.Latitude,
+			&place.Longitude,
+			&place.Address,
+			&place.Category,
+			&place.ImageURL,
+			&place.IsActive,
+			&place.CreatedAt,
+			&place.UpdatedAt,
+		); err != nil {
+			return nil, domainErr.New(domainErr.ErrInternal, "failed to scan place", err)
+		}
+		places = append(places, &place)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, domainErr.New(domainErr.ErrInternal, "failed to read places", err)
+	}
+	return places, nil
 }

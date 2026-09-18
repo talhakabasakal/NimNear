@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	iamRepo "github.com/masterfabric-go/masterfabric/internal/domain/iam/repository"
 	iamService "github.com/masterfabric-go/masterfabric/internal/domain/iam/service"
 	"github.com/masterfabric-go/masterfabric/internal/domain/tenant/repository"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
@@ -21,6 +22,7 @@ type ConnectInput struct {
 type ValidateConnectUseCase struct {
 	appRepo     repository.AppRepository
 	rbacService iamService.RBACService
+	users       iamRepo.UserRepository
 }
 
 // NewValidateConnectUseCase creates a new ValidateConnectUseCase.
@@ -28,10 +30,18 @@ func NewValidateConnectUseCase(appRepo repository.AppRepository, rbac iamService
 	return &ValidateConnectUseCase{appRepo: appRepo, rbacService: rbac}
 }
 
+// WithUsers rejects deleted or inactive accounts at the WebSocket validation layer.
+func (uc *ValidateConnectUseCase) WithUsers(users iamRepo.UserRepository) *ValidateConnectUseCase {
+	if uc != nil {
+		uc.users = users
+	}
+	return uc
+}
+
 // Execute verifies org/app ownership and RBAC before upgrading the connection.
 func (uc *ValidateConnectUseCase) Execute(ctx context.Context, userID, orgID, appID uuid.UUID) (*ConnectInput, error) {
-	if userID == uuid.Nil {
-		return nil, domainErr.New(domainErr.ErrUnauthorized, "user not authenticated", nil)
+	if err := uc.requireActiveUser(ctx, userID); err != nil {
+		return nil, err
 	}
 	if orgID == uuid.Nil {
 		return nil, domainErr.New(domainErr.ErrBadRequest, "organization context required", nil)
@@ -64,6 +74,28 @@ func (uc *ValidateConnectUseCase) Execute(ctx context.Context, userID, orgID, ap
 		OrganizationID: orgID,
 		AppID:          appID,
 	}, nil
+}
+
+// ExecuteUser validates an authenticated Nimnear session without tenant/app scope.
+func (uc *ValidateConnectUseCase) ExecuteUser(ctx context.Context, userID uuid.UUID) (*ConnectInput, error) {
+	if err := uc.requireActiveUser(ctx, userID); err != nil {
+		return nil, err
+	}
+	return &ConnectInput{UserID: userID}, nil
+}
+
+func (uc *ValidateConnectUseCase) requireActiveUser(ctx context.Context, userID uuid.UUID) error {
+	if userID == uuid.Nil {
+		return domainErr.New(domainErr.ErrUnauthorized, "user not authenticated", nil)
+	}
+	if uc == nil || uc.users == nil {
+		return nil
+	}
+	user, err := uc.users.GetByID(ctx, userID)
+	if err != nil || user == nil || !user.IsActive() {
+		return domainErr.NewWithCode(domainErr.ErrUnauthorized, "account_unavailable", "account is not active", err)
+	}
+	return nil
 }
 
 // ParseAppHeader parses the X-App-ID header value.

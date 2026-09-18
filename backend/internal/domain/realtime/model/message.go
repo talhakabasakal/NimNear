@@ -37,6 +37,12 @@ type OutboundMessage struct {
 	Timestamp      time.Time       `json:"timestamp,omitempty"`
 }
 
+// ClientEventData is the browser-visible payload for payment-domain events.
+type ClientEventData struct {
+	ResourceID string `json:"resource_id"`
+	Status     string `json:"status"`
+}
+
 // NewEventMessage builds a domain event push payload.
 func NewEventMessage(eventType, topic, orgID, appID string, data json.RawMessage) OutboundMessage {
 	return OutboundMessage{
@@ -47,6 +53,20 @@ func NewEventMessage(eventType, topic, orgID, appID string, data json.RawMessage
 		Data:           data,
 		Timestamp:      time.Now().UTC(),
 	}
+}
+
+// NewUserEventMessage builds a user-scoped event without tenant identifiers.
+func NewUserEventMessage(eventType, topic string, data ClientEventData) (OutboundMessage, error) {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return OutboundMessage{}, err
+	}
+	return OutboundMessage{
+		Type:      eventType,
+		Topic:     topic,
+		Data:      raw,
+		Timestamp: time.Now().UTC(),
+	}, nil
 }
 
 // NewControlMessage builds a control response (pong, subscribed, error).

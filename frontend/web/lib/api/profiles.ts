@@ -1,5 +1,7 @@
 import { apiBaseUrl } from "./events";
 import type { EventRecord } from "./events";
+import { withAuthSession } from "./session-request";
+import { userFacingApiMessage } from "./http-error";
 
 export type ProfileRecord = {
   id: string;
@@ -7,6 +9,7 @@ export type ProfileRecord = {
   username: string | null;
   bio: string | null;
   avatar_url: string | null;
+  wallet_address: string | null;
   joined_at: string;
   organized_event_count: number;
   attended_event_count: number;
@@ -20,7 +23,11 @@ export type UpdateProfileInput = {
 
 type ProfileResponse = { data: ProfileRecord };
 type ProfileEventsResponse = { data: EventRecord[] };
-type ProfileErrorPayload = { message?: string; error?: string; error_code?: string };
+type ProfileErrorPayload = {
+  message?: string;
+  error?: string;
+  error_code?: string;
+};
 
 export class ProfilesApiError extends Error {
   constructor(
@@ -34,37 +41,57 @@ export class ProfilesApiError extends Error {
 }
 
 async function throwProfileApiError(response: Response): Promise<never> {
-  const payload = (await response.json().catch(() => null)) as ProfileErrorPayload | null;
+  const payload = (await response
+    .json()
+    .catch(() => null)) as ProfileErrorPayload | null;
   throw new ProfilesApiError(
     response.status,
-    payload?.message ?? payload?.error ?? "Profile API returned " + response.status,
+    userFacingApiMessage(
+      response.status,
+      payload?.message ?? payload?.error,
+      "Profile could not be loaded.",
+    ),
     payload?.error_code,
   );
 }
 
 export async function fetchProfile(id: string): Promise<ProfileRecord> {
-  const response = await fetch(new URL("/api/v1/profiles/" + encodeURIComponent(id), apiBaseUrl), { cache: "no-store" });
+  const response = await fetch(
+    new URL("/api/v1/profiles/" + encodeURIComponent(id), apiBaseUrl),
+    { cache: "no-store" },
+  );
   if (!response.ok) await throwProfileApiError(response);
   return ((await response.json()) as ProfileResponse).data;
 }
 
-export async function fetchProfileEvents(id: string, type: "organized" | "attended"): Promise<EventRecord[]> {
-  const url = new URL("/api/v1/profiles/" + encodeURIComponent(id) + "/events", apiBaseUrl);
+export async function fetchProfileEvents(
+  id: string,
+  type: "organized" | "attended",
+): Promise<EventRecord[]> {
+  const url = new URL(
+    "/api/v1/profiles/" + encodeURIComponent(id) + "/events",
+    apiBaseUrl,
+  );
   url.searchParams.set("type", type);
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) await throwProfileApiError(response);
   return ((await response.json()) as ProfileEventsResponse).data;
 }
 
-export async function updateProfile(input: UpdateProfileInput, token: string): Promise<ProfileRecord> {
-  const response = await fetch(new URL("/api/v1/me/profile", apiBaseUrl), {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer " + token,
-    },
-    body: JSON.stringify(input),
-  });
+export async function updateProfile(
+  input: UpdateProfileInput,
+  token?: string,
+): Promise<ProfileRecord> {
+  const response = await fetch(
+    new URL("/api/v1/me/profile", apiBaseUrl),
+    withAuthSession(token, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    }),
+  );
   if (!response.ok) await throwProfileApiError(response);
   return ((await response.json()) as ProfileResponse).data;
 }

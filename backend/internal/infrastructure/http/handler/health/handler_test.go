@@ -27,3 +27,29 @@ func TestReadiness_DoesNotExposeInternalErrors(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "secret-db")
 	assert.Contains(t, rec.Body.String(), "unhealthy")
 }
+
+func TestReadiness_ReportsNimiqRPCWithoutFailingCoreReady(t *testing.T) {
+	handler := NewHandler(nil, nil).WithNimiqRPC(true, failingRPC{})
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	rec := httptest.NewRecorder()
+	handler.Readiness(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"nimiq_rpc":"unhealthy"`)
+	assert.NotContains(t, rec.Body.String(), "secret-rpc")
+}
+
+func TestReadiness_MarksNimiqRPCDisabledWhenPaymentsOff(t *testing.T) {
+	handler := NewHandler(nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	rec := httptest.NewRecorder()
+	handler.Readiness(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"nimiq_rpc":"disabled"`)
+}
+
+type failingRPC struct{}
+
+func (failingRPC) Check(context.Context) error {
+	return errors.New("connection refused host=secret-rpc:8648")
+}

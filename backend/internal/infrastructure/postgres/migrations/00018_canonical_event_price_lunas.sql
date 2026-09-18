@@ -1,6 +1,7 @@
 -- +goose Up
 -- Canonical event prices are stored as integer Luna. One NIM is exactly 100,000 Luna.
 -- The preflight check intentionally fails instead of rounding incompatible data.
+-- +goose StatementBegin
 DO $do$
 BEGIN
     IF EXISTS (
@@ -37,9 +38,12 @@ BEGIN
 END $do$;
 
 ALTER TABLE events DROP COLUMN IF EXISTS price_nim;
+-- +goose StatementEnd
 
 -- +goose Down
+-- +goose StatementBegin
 ALTER TABLE events ADD COLUMN price_nim NUMERIC(20,8) NOT NULL DEFAULT 0;
 UPDATE events SET price_nim = price_lunas::numeric / 100000;
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_price_lunas_nonnegative;
 ALTER TABLE events DROP COLUMN price_lunas;
+-- +goose StatementEnd

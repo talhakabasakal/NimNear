@@ -97,6 +97,12 @@ func (f *fakeCreateCalendarRepository) Follow(context.Context, uuid.UUID, uuid.U
 func (f *fakeCreateCalendarRepository) Unfollow(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
+func (f *fakeCreateCalendarRepository) UpdateOwned(context.Context, uuid.UUID, uuid.UUID, calendarModel.Patch, time.Time) (*calendarModel.Calendar, error) {
+	return f.calendar, f.err
+}
+func (f *fakeCreateCalendarRepository) ArchiveOwned(context.Context, uuid.UUID, uuid.UUID, time.Time) (*calendarModel.Calendar, error) {
+	return f.calendar, f.err
+}
 
 var _ calendarRepo.CalendarRepository = (*fakeCreateCalendarRepository)(nil)
 
@@ -339,6 +345,13 @@ func TestCreateRejectsUnauthorizedOrMissingCalendar(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, domainErr.ErrNotFound) {
 		t.Fatalf("error = %v, want missing calendar error", err)
+	}
+	archived := &calendarModel.Calendar{ID: calendarID, OwnerID: organizerID, Status: calendarModel.StatusArchived}
+	_, err = NewEventUseCaseWithAssociations(&fakeEventRepository{}, &fakeCreatePlaceRepository{}, &fakeCreateCalendarRepository{calendar: archived}).Create(context.Background(), organizerID, dto.CreateEventRequest{
+		Title: "Archived calendar", StartsAt: time.Now().UTC().Add(time.Hour), EndsAt: time.Now().UTC().Add(2 * time.Hour), City: "Istanbul", CalendarID: &calendarID,
+	})
+	if err == nil || !errors.Is(err, domainErr.ErrForbidden) {
+		t.Fatalf("error = %v, want forbidden archived calendar association", err)
 	}
 }
 

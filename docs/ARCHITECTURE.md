@@ -24,11 +24,12 @@ Stack:
 - shadcn/ui
 - @nimiq/mini-app-sdk
 - qrcode
-- html5-qrcode
 
 The frontend is deployed separately from the Go backend.
 
-Expected frontend hosting: Vercel.
+Primary production path: Vercel, project root `frontend/web`. See `docs/VERCEL_DEPLOYMENT.md`.
+
+Supported alternative path: a Next.js standalone Docker image built from `frontend/web/Dockerfile`. `NEXT_PUBLIC_*` values are public build-time config. Do not bake JWT, database, Redis, or RPC secrets into the frontend image or Vercel project.
 
 ## Frontend Rendering Model
 
@@ -69,11 +70,19 @@ Existing infrastructure includes:
 
 Do not replace these systems without an explicit architectural decision.
 
+NIMNear product surfaces are distinct from leftover MasterFabric platform
+APIs. See `docs/PRODUCT_BOUNDARIES.md`.
+
 ## Data
 
 Primary persistent database: PostgreSQL.
 
 Redis is available for appropriate caching/ephemeral infrastructure.
+
+Production requires Redis and fails startup if it is unreachable. Rate limits
+and WebSocket fan-out then apply cluster-wide. Single-process development may
+fall back to in-memory limiters and local WebSocket delivery when Redis is
+down.
 
 Kafka is available for asynchronous/event-driven workloads. Kafka should not be introduced into simple request/response flows without a reason.
 

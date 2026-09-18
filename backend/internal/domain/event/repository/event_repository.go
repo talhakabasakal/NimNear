@@ -26,3 +26,10 @@ type EventRepository interface {
 	GetPublicByID(ctx context.Context, id uuid.UUID) (*model.Event, error)
 	Create(ctx context.Context, event *model.Event) error
 }
+
+// LifecycleRepository contains organizer-owned and operator lifecycle mutations.
+type LifecycleRepository interface {
+	UpdateOwned(ctx context.Context, eventID, organizerID uuid.UUID, patch model.Patch, now time.Time) (*model.Event, error)
+	CancelOwned(ctx context.Context, eventID, organizerID uuid.UUID, now time.Time) (*model.Event, error)
+	Cancel(ctx context.Context, eventID uuid.UUID, now time.Time) (*model.Event, error)
+}

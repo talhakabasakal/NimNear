@@ -18,4 +18,5 @@ type PurchaseRepository interface {
 	ListReconciliationCandidates(ctx context.Context, now time.Time, retryInterval, fallbackDeadline time.Duration, limit int) ([]*model.Purchase, error)
 	SetVerificationState(ctx context.Context, purchaseID, userID uuid.UUID, status model.Status, now time.Time) (*model.Purchase, error)
 	ExpireUnresolved(ctx context.Context, purchaseID, userID uuid.UUID, now time.Time, fallbackDeadline time.Duration) (*model.Purchase, error)
+	ConfirmExpiredRecovery(ctx context.Context, purchaseID, userID uuid.UUID, now time.Time) (*model.Purchase, error)
 }

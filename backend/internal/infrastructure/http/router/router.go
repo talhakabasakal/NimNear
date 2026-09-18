@@ -20,18 +20,21 @@ import (
 	eventpurchaseHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/eventpurchase"
 	"github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/health"
 	iamHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/iam"
+	paymentrequestHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/paymentrequest"
 	placeHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/place"
 	profileHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/profile"
 	realtimeHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/realtime"
 	tenantHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/tenant"
+	walletHandler "github.com/masterfabric-go/masterfabric/internal/infrastructure/http/handler/wallet"
 
 	// Services & middleware
 	iamService "github.com/masterfabric-go/masterfabric/internal/domain/iam/service"
 	"github.com/masterfabric-go/masterfabric/internal/gateway"
+	"github.com/masterfabric-go/masterfabric/internal/shared/httpx"
 	"github.com/masterfabric-go/masterfabric/internal/shared/middleware"
 
-	// Repositories (for tenant resolver middleware)
 	tenantRepo "github.com/masterfabric-go/masterfabric/internal/domain/tenant/repository"
+	iamRepo "github.com/masterfabric-go/masterfabric/internal/domain/iam/repository"
 )
 
 func maybeRequirePermission(rbac iamService.RBACService, permission string) func(http.Handler) http.Handler {
@@ -49,23 +52,34 @@ type Dependencies struct {
 
 	CORSAllowedOrigins []string
 	MaxBodyBytes       int64
+	SessionCookieName  string
+	TrustedProxies     httpx.TrustedProxies
+	PaymentsEnabled    bool
+	EmailAuthEnabled   bool
+	PlatformAPIEnabled bool
+	MetricsEnabled     bool
+	MetricsPublic      bool
+	NimiqRPCHealth     health.RPCChecker
 
 	// Services
 	AuthService iamService.AuthService
 	RBACService iamService.RBACService
+	UserRepo    iamRepo.UserRepository
 
 	// Handlers
-	IAMHandler           *iamHandler.Handler
-	TenantHandler        *tenantHandler.Handler
-	APIMgmtHandler       *apimgmtHandler.Handler
-	AuditHandler         *auditHandler.Handler
-	EventHandler         *eventHandler.Handler
-	ParticipationHandler *participationHandler.Handler
-	PurchaseHandler      *eventpurchaseHandler.Handler
-	ProfileHandler       *profileHandler.Handler
-	PlaceHandler         *placeHandler.Handler
-	CalendarHandler      *calendarHandler.Handler
-	RealtimeHandler      *realtimeHandler.Handler
+	IAMHandler            *iamHandler.Handler
+	TenantHandler         *tenantHandler.Handler
+	APIMgmtHandler        *apimgmtHandler.Handler
+	AuditHandler          *auditHandler.Handler
+	EventHandler          *eventHandler.Handler
+	ParticipationHandler  *participationHandler.Handler
+	PurchaseHandler       *eventpurchaseHandler.Handler
+	PaymentRequestHandler *paymentrequestHandler.Handler
+	ProfileHandler        *profileHandler.Handler
+	PlaceHandler          *placeHandler.Handler
+	CalendarHandler       *calendarHandler.Handler
+	WalletHandler         *walletHandler.Handler
+	RealtimeHandler       *realtimeHandler.Handler
 
 	// Gateway
 	GatewayPipeline *gateway.Pipeline
@@ -83,26 +97,37 @@ func New(deps Dependencies) *chi.Mux {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logging(deps.Logger))
 	r.Use(middleware.Recoverer(deps.Logger))
+	r.Use(middleware.SecurityHeaders)
 	if deps.MaxBodyBytes > 0 {
 		r.Use(middleware.MaxBodyBytes(deps.MaxBodyBytes))
 	}
 	r.Use(cors.Handler(middleware.CORSOptions(deps.CORSAllowedOrigins)))
+	r.Use(httpx.Middleware(deps.TrustedProxies))
+	r.Use(middleware.CookieMutationOrigin(deps.CORSAllowedOrigins, deps.SessionCookieName))
 
-	// Health endpoints
-	healthHandler := health.NewHandler(deps.DB, deps.Redis)
+	// Health endpoints. Nimiq RPC is reported when payments are enabled but does
+	// not fail /ready; payment paths fail closed independently.
+	healthHandler := health.NewHandler(deps.DB, deps.Redis).WithNimiqRPC(deps.PaymentsEnabled, deps.NimiqRPCHealth)
 	r.Get("/health/live", healthHandler.Liveness)
 	r.Get("/health/ready", healthHandler.Readiness)
 
-	// Prometheus metrics
-	r.Handle("/metrics", promhttp.Handler())
+	if deps.MetricsEnabled && deps.MetricsPublic {
+		r.Handle("/metrics", promhttp.Handler())
+	}
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth routes (no JWT required)
 		r.Route("/auth", func(r chi.Router) {
 			if deps.IAMHandler != nil {
-				r.Post("/register", deps.IAMHandler.Register)
-				r.Post("/login", deps.IAMHandler.Login)
+				if deps.EmailAuthEnabled {
+					r.Post("/register", deps.IAMHandler.Register)
+					r.Post("/login", deps.IAMHandler.Login)
+					r.Post("/token", deps.IAMHandler.IssueToken)
+				}
+				r.Post("/logout", deps.IAMHandler.Logout)
+				r.Post("/nimiq/challenges", deps.IAMHandler.CreateNimiqChallenge)
+				r.Post("/nimiq/verify", deps.IAMHandler.VerifyNimiqChallenge)
 			}
 		})
 
@@ -123,11 +148,15 @@ func New(deps Dependencies) *chi.Mux {
 			r.Get("/profiles/{id}", deps.ProfileHandler.GetPublic)
 			r.Get("/profiles/{id}/events", deps.ProfileHandler.ListEvents)
 		}
+		if deps.PaymentRequestHandler != nil {
+			r.Get("/public/payment-requests/{public_id}", deps.PaymentRequestHandler.GetPublic)
+		}
 
 		// Protected routes (require JWT)
 		r.Group(func(r chi.Router) {
 			if deps.AuthService != nil {
-				r.Use(middleware.JWTAuth(deps.AuthService))
+				r.Use(middleware.JWTAuth(deps.AuthService, deps.SessionCookieName))
+				r.Use(middleware.RequireActiveAccount(deps.UserRepo))
 			}
 
 			// Tenant resolution middleware (with workspace support)
@@ -147,30 +176,37 @@ func New(deps Dependencies) *chi.Mux {
 			// JWT auth + tenant resolution from the parent group, while /ws above stays
 			// outside the pipeline.
 			r.Group(func(r chi.Router) {
-				if deps.GatewayPipeline != nil {
+				if deps.PlatformAPIEnabled && deps.GatewayPipeline != nil {
 					r.Use(deps.GatewayPipeline.Enforce)
 				}
 
 				// User routes
 				if deps.IAMHandler != nil {
 					r.Get("/me", deps.IAMHandler.GetMe)
+					r.Delete("/me", deps.IAMHandler.DeleteMe)
 					if deps.ProfileHandler != nil {
 						r.Patch("/me/profile", deps.ProfileHandler.UpdateMe)
 					}
-					r.With(maybeRequirePermission(deps.RBACService, "user:read")).Route("/users", func(r chi.Router) {
-						r.Get("/", deps.IAMHandler.ListUsers)
-						r.Get("/{id}", deps.IAMHandler.GetUser)
-					})
-					r.With(maybeRequirePermission(deps.RBACService, "user:write")).Post("/roles/assign", deps.IAMHandler.AssignRole)
+					if deps.PlatformAPIEnabled {
+						r.With(maybeRequirePermission(deps.RBACService, "user:read")).Route("/users", func(r chi.Router) {
+							r.Get("/", deps.IAMHandler.ListUsers)
+							r.Get("/{id}", deps.IAMHandler.GetUser)
+						})
+						r.With(maybeRequirePermission(deps.RBACService, "user:write")).Post("/roles/assign", deps.IAMHandler.AssignRole)
+					}
 				}
 
 				if deps.EventHandler != nil {
 					r.Post("/events", deps.EventHandler.Create)
+					r.Patch("/events/{id}", deps.EventHandler.Update)
+					r.Post("/events/{id}/cancel", deps.EventHandler.Cancel)
 				}
 
 				if deps.CalendarHandler != nil {
 					r.Get("/me/calendars", deps.CalendarHandler.ListMine)
 					r.Post("/calendars", deps.CalendarHandler.Create)
+					r.Patch("/calendars/{id}", deps.CalendarHandler.Update)
+					r.Post("/calendars/{id}/archive", deps.CalendarHandler.Archive)
 					r.Post("/calendars/{id}/follow", deps.CalendarHandler.Follow)
 					r.Delete("/calendars/{id}/follow", deps.CalendarHandler.Unfollow)
 				}
@@ -187,10 +223,25 @@ func New(deps Dependencies) *chi.Mux {
 					r.Get("/purchases/{id}", deps.PurchaseHandler.Get)
 					r.Get("/purchases/{id}/payment-instructions", deps.PurchaseHandler.PaymentInstructions)
 					r.Post("/purchases/{id}/transaction", deps.PurchaseHandler.SubmitTransaction)
+					r.Post("/purchases/{id}/reverify", deps.PurchaseHandler.RecoverExpired)
+				}
+
+				if deps.WalletHandler != nil {
+					r.Get("/wallet/balance", deps.WalletHandler.GetBalance)
+					r.Get("/wallet/transactions", deps.WalletHandler.GetTransactions)
+				}
+
+				if deps.PaymentRequestHandler != nil {
+					r.Get("/payment-requests", deps.PaymentRequestHandler.List)
+					r.Post("/payment-requests", deps.PaymentRequestHandler.Create)
+					r.Get("/payment-requests/{public_id}", deps.PaymentRequestHandler.Get)
+					r.Post("/payment-requests/{public_id}/cancel", deps.PaymentRequestHandler.Cancel)
+					r.Post("/payment-requests/{public_id}/transaction", deps.PaymentRequestHandler.SubmitTransaction)
+					r.Post("/payment-requests/{public_id}/reverify", deps.PaymentRequestHandler.RecoverExpired)
 				}
 
 				// Organization routes
-				if deps.TenantHandler != nil {
+				if deps.PlatformAPIEnabled && deps.TenantHandler != nil {
 					r.Route("/organizations", func(r chi.Router) {
 						r.With(maybeRequirePermission(deps.RBACService, "org:write")).Post("/", deps.TenantHandler.CreateOrg)
 						r.With(maybeRequirePermission(deps.RBACService, "org:read")).Get("/", deps.TenantHandler.ListOrgs)
@@ -246,20 +297,18 @@ func New(deps Dependencies) *chi.Mux {
 				}
 
 				// Audit logs by user
-				if deps.AuditHandler != nil {
+				if deps.PlatformAPIEnabled && deps.AuditHandler != nil {
 					r.With(maybeRequirePermission(deps.RBACService, "org:read")).Get("/users/{userId}/audit-logs", deps.AuditHandler.ListByUser)
 				}
 
 				// Catch-all handler for managed endpoints (must be last in the group)
-				// This allows the gateway pipeline to handle dynamic endpoints like /api/v1/products
-				// The gateway middleware will validate and return responses for managed endpoints
-				r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
-					// Gateway middleware should have already handled this if it's a managed endpoint
-					// If we reach here, it means no endpoint was found, return 404
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusNotFound)
-					_, _ = w.Write([]byte(`{"error":"endpoint not found","code":404,"message":"No endpoint registered for this path. Define the endpoint first using POST /api/v1/organizations/{orgId}/apps/{appId}/endpoints"}`))
-				})
+				if deps.PlatformAPIEnabled {
+					r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusNotFound)
+						_, _ = w.Write([]byte(`{"error":"endpoint not found","code":404,"message":"No endpoint registered for this path. Define the endpoint first using POST /api/v1/organizations/{orgId}/apps/{appId}/endpoints"}`))
+					})
+				}
 			})
 		})
 	})
@@ -270,7 +319,7 @@ func New(deps Dependencies) *chi.Mux {
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		// If this is an API v1 path, let the gateway handle it (if it hasn't already)
 		// Otherwise return 404
-		if !strings.HasPrefix(r.URL.Path, "/api/v1") {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1") || !deps.PlatformAPIEnabled {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not found","code":404}`))

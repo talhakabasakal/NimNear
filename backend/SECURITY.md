@@ -90,6 +90,8 @@ When deploying NIMNear in production:
 - Use SSL/TLS for database connections (`DB_SSLMODE=require`)
 - Set `CORS_ALLOWED_ORIGINS` to explicit trusted origins
 - Enable rate limiting for production workloads via endpoint policies
+- Keep `NIMNEAR_EMAIL_AUTH_ENABLED` and `NIMNEAR_PLATFORM_API_ENABLED` off in production unless explicitly required
+- Keep `NIMNEAR_METRICS_PUBLIC=false` in production unless metrics are reachable only on a private network
 - Regularly update dependencies (`go get -u ./...`) and run `govulncheck`
 - Review and rotate API keys regularly
 - Monitor audit logs for suspicious activity
@@ -101,9 +103,10 @@ When deploying NIMNear in production:
 
 | Risk | Rationale | Mitigation |
 | ---- | --------- | ---------- |
-| Unauthenticated `/metrics` and `/health/*` | Required for orchestrator probes and Prometheus scraping | Restrict by network policy or reverse-proxy auth |
+| Unauthenticated `/health/*` | Required for orchestrator probes | Restrict by network policy if the listener is public |
+| `/metrics` public scrape | Development convenience | Production default `NIMNEAR_METRICS_PUBLIC=false`; scrape from a private network if enabled |
 | HS256 JWT | Simplicity for single-tenant deployments | Rotate secrets; prefer external identity for large fleets |
-| Dynamic SQL gateway handler | Admin-defined table names via endpoint configuration | RBAC on endpoint creation; audit endpoint changes |
+| Dynamic SQL gateway handler | Inherited MasterFabric managed endpoints | Production default `NIMNEAR_PLATFORM_API_ENABLED=false`; identifier grammar; table/column allowlists; fail closed |
 | Gateway HTTP proxy (gosec G704) | Managed endpoints may proxy to operator-configured backends | RBAC on endpoint creation; redirect refusal; response size cap |
 | Development compose credentials | Convenience for local bootstrap | Loopback bind + documented dev-only posture |
 

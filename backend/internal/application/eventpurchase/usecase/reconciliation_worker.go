@@ -39,7 +39,7 @@ func (w *ReconciliationWorker) runOnce(ctx context.Context) {
 	report, err := w.useCase.Reconcile(ctx)
 	if err != nil {
 		if w.logger != nil {
-			w.logger.Warn("payment reconciliation batch failed", "error", err)
+			w.logger.Error("payment reconciliation batch failed", "error", err)
 		}
 		return
 	}

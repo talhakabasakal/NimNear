@@ -7,10 +7,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterfabric-go/masterfabric/internal/application/eventpurchase/verification"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/model"
 	"github.com/masterfabric-go/masterfabric/internal/domain/eventpurchase/repository"
 	domainErr "github.com/masterfabric-go/masterfabric/internal/shared/errors"
 )
+
+type identityStub struct {
+	addresses []string
+}
+
+func (s identityStub) VerifiedAddresses(context.Context, uuid.UUID) ([]string, error) {
+	return s.addresses, nil
+}
 
 type fakePurchaseRepository struct {
 	purchase     *model.Purchase
@@ -22,6 +31,7 @@ type fakePurchaseRepository struct {
 	candidates   []*model.Purchase
 	gotListLimit int
 	claimCalls   int
+	submitCalls  int
 }
 
 func (f *fakePurchaseRepository) Create(_ context.Context, eventID, userID uuid.UUID, now time.Time, hold time.Duration) (*model.Purchase, error) {
@@ -37,9 +47,13 @@ func (f *fakePurchaseRepository) GetActiveForEvent(_ context.Context, _, _ uuid.
 	return f.purchase, f.err
 }
 
-func (f *fakePurchaseRepository) SubmitTransaction(_ context.Context, _, _ uuid.UUID, hash string, _ time.Time, deadline time.Time) (*model.Purchase, error) {
+func (f *fakePurchaseRepository) SubmitTransaction(_ context.Context, purchaseID, _ uuid.UUID, hash string, _ time.Time, deadline time.Time) (*model.Purchase, error) {
+	f.submitCalls++
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.purchase != nil && f.purchase.ID != purchaseID {
+		return nil, domainErr.NewWithCode(domainErr.ErrAlreadyExists, "transaction_hash_used", "transaction hash is already assigned to another purchase", nil)
 	}
 	if f.purchase != nil {
 		f.purchase.TransactionHash = &hash
@@ -121,6 +135,25 @@ func (f *fakePurchaseRepository) SetVerificationState(_ context.Context, purchas
 	return f.purchase, nil
 }
 
+func (f *fakePurchaseRepository) ConfirmExpiredRecovery(_ context.Context, purchaseID, _ uuid.UUID, now time.Time) (*model.Purchase, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.purchase == nil || f.purchase.ID != purchaseID {
+		return nil, domainErr.New(domainErr.ErrNotFound, "purchase not found", nil)
+	}
+	if f.purchase.Status == model.StatusConfirmed {
+		return f.purchase, nil
+	}
+	if f.purchase.Status != model.StatusExpired || f.purchase.TransactionHash == nil {
+		return nil, domainErr.NewWithCode(domainErr.ErrConflict, "purchase_not_recoverable", "purchase is not an expired payment with a reserved transaction", nil)
+	}
+	f.purchase.Status = model.StatusConfirmed
+	confirmedAt := now
+	f.purchase.ConfirmedAt = &confirmedAt
+	return f.purchase, nil
+}
+
 func TestPurchaseUseCaseCreateScenarios(t *testing.T) {
 	eventID, userID := uuid.New(), uuid.New()
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
@@ -129,23 +162,28 @@ func TestPurchaseUseCaseCreateScenarios(t *testing.T) {
 		Status: model.StatusPending, CreatedAt: now, UpdatedAt: now,
 	}
 	repoErr := errors.New("repository failure")
+	identities := identityStub{addresses: []string{"NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604"}}
+	verifier := &scriptedVerifier{outcome: verification.OutcomeNotFinal}
 
 	tests := []struct {
 		name       string
 		eventID    uuid.UUID
 		userID     uuid.UUID
 		repo       *fakePurchaseRepository
+		configured bool
 		wantKind   error
+		wantCode   string
 		wantNIM    string
 		wantLunas  string
 		wantStatus string
 		wantHold   time.Duration
 	}{
-		{name: "valid exact paid amount", eventID: eventID, userID: userID, repo: &fakePurchaseRepository{purchase: purchase}, wantNIM: "12.5", wantLunas: "1250000", wantStatus: "pending", wantHold: 10 * time.Minute},
+		{name: "valid exact paid amount", eventID: eventID, userID: userID, repo: &fakePurchaseRepository{purchase: purchase}, configured: true, wantNIM: "12.5", wantLunas: "1250000", wantStatus: "pending", wantHold: 10 * time.Minute},
 		{name: "missing event", eventID: uuid.Nil, userID: userID, repo: &fakePurchaseRepository{purchase: purchase}, wantKind: domainErr.ErrBadRequest},
 		{name: "missing user", eventID: eventID, userID: uuid.Nil, repo: &fakePurchaseRepository{purchase: purchase}, wantKind: domainErr.ErrUnauthorized},
 		{name: "nil repository", eventID: eventID, userID: userID, wantKind: domainErr.ErrInternal},
-		{name: "repository failure", eventID: eventID, userID: userID, repo: &fakePurchaseRepository{err: repoErr}, wantKind: repoErr},
+		{name: "repository failure", eventID: eventID, userID: userID, repo: &fakePurchaseRepository{err: repoErr}, configured: true, wantKind: repoErr},
+		{name: "verifier disabled", eventID: eventID, userID: userID, repo: &fakePurchaseRepository{purchase: purchase}, wantCode: "payment_not_configured"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -153,9 +191,23 @@ func TestPurchaseUseCaseCreateScenarios(t *testing.T) {
 			if tt.repo != nil {
 				repo = tt.repo
 			}
-			uc := NewPurchaseUseCase(repo, 0)
+			var uc *PurchaseUseCase
+			if tt.configured {
+				uc = NewPurchaseUseCaseWithVerifier(repo, 0, verifier, "merchant", "MainAlbatross").WithIdentities(identities)
+			} else {
+				uc = NewPurchaseUseCase(repo, 0)
+			}
 			uc.now = func() time.Time { return now }
 			result, err := uc.Create(context.Background(), tt.eventID, tt.userID)
+			if tt.wantCode != "" {
+				if err == nil || domainErr.ErrorCode(err) != tt.wantCode {
+					t.Fatalf("error = %v, want code %s", err, tt.wantCode)
+				}
+				if tt.repo != nil && tt.repo.gotEvent != uuid.Nil {
+					t.Fatal("create reached the repository when payments were not configured")
+				}
+				return
+			}
 			if tt.wantKind != nil {
 				if err == nil || (!errors.Is(err, tt.wantKind) && err != tt.wantKind) {
 					t.Fatalf("error = %v, want %v", err, tt.wantKind)
@@ -181,7 +233,8 @@ func TestPurchaseUseCaseMapsFractionalLunaWithoutRounding(t *testing.T) {
 		ID: uuid.New(), EventID: uuid.New(), UserID: uuid.New(), AmountLunas: 1,
 		Status: model.StatusPending, CreatedAt: now, UpdatedAt: now,
 	}}
-	result, err := NewPurchaseUseCase(repo, time.Minute).Create(context.Background(), repo.purchase.EventID, repo.purchase.UserID)
+	uc := NewPurchaseUseCaseWithVerifier(repo, time.Minute, &scriptedVerifier{}, "merchant", "MainAlbatross").WithIdentities(identityStub{addresses: []string{"NQ46 KLJE 5TMF 4Y1A 1255 CJHJ YG1S H0NU T604"}})
+	result, err := uc.Create(context.Background(), repo.purchase.EventID, repo.purchase.UserID)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}

@@ -25,18 +25,24 @@ NIMNear is final only when:
 
 ## External blocker
 
-`docs/NIMIQ_AUTH_CONTRACT.md` is an external **NO-GO** blocker. The official
-Mini App material still does not establish:
+Nimiq wallet authentication is **implemented** for Testnet. See
+`docs/NIMIQ_AUTH_IMPLEMENTATION.md`. `docs/NIMIQ_AUTH_CONTRACT.md` retains the
+historical investigation and its original NO-GO verdict as design history.
 
-1. the exact bytes or digest signed by `sign(message)`;
-2. the semantics of `{ message, isHex }`;
-3. native signer selection when more than one account is approved; and
-4. sufficient Mini App-specific vectors proving the returned public key is the
-   address-verifiable ordinary Nimiq key.
+Implemented:
 
-Do not infer the Mini App contract from Hub/Keyguard signing, fabricate a JWT
-from `listAccounts()`, trust a frontend address claim, weaken protected
-endpoints, or route production payments through an unverified profile field.
+- AUTH_LOGIN challenge/verify for Mini App and Hub
+- HttpOnly cookie session for the Mini App
+- paid-event hash verification against Nimiq RPC, including sender binding
+
+Planned / not implemented:
+
+- device identifier
+- RPC WebSocket listener
+- generic payments API
+- transaction history UI
+- deep-link payment requests
+- organizer payouts, tickets, QR/check-in
 
 # LANE A — CAN COMPLETE NOW
 
@@ -57,7 +63,7 @@ Exact implementation objective: record decisions for:
 - whether calendars and city/location discovery are implemented in this
   release or explicitly de-scoped;
 - default-city behavior when location is denied or unavailable;
-- whether the homepage section is called “Yaklaşan etkinlikler” or receives a
+- whether the homepage section is called “Upcoming events” or receives a
   real popularity definition;
 - the supported event-creation field set;
 - external image/avatar policy;
@@ -216,8 +222,8 @@ Backend/API work:
 
 Frontend work:
 
-- rename the section to a truthful label such as “Yaklaşan etkinlikler” or
-  “Yakındaki etkinlikler” when no ranking exists;
+- rename the section to a truthful label such as “Upcoming events” or
+  “Nearby events” when no ranking exists;
 - keep event records, count, price, status, date, image, and location API-backed;
 - preserve loading, empty, and error states.
 
@@ -282,12 +288,12 @@ calendars are location-scoped. Public calendar reads do not require Nimiq auth.
 Affected files/domains: calendar schema/domain/API, `frontend/web/app` calendar
 route/components, shared navigation, `docs/USER_FLOWS.md`.
 
-Exact implementation objective: replace the disabled “Yakında” calendar navigation with real public list/detail behavior and real authenticated workspace states.
+Exact implementation objective: replace the disabled “Coming soon” calendar navigation with real public list/detail behavior and real authenticated workspace states.
 
 Backend/API work:
 
 - define public calendar list/detail DTOs and ownership/privacy rules;
-- implement real `Takvimlerim` and followed-calendar reads;
+- implement real `My calendars` and followed-calendar reads;
 - implement create/follow/unfollow with the existing legacy JWT because the committed Figma surface includes these actions;
 - keep writes protected by the current legacy JWT until the Nimiq JWT bridge
   exists; do not treat `listAccounts()` as authorization;
@@ -304,7 +310,7 @@ Frontend work:
 Tests required: public/private read authorization, empty/error states, owner
 isolation, create/follow idempotency, and native-connected-without-JWT behavior.
 
-Definition of done: calendar navigation, public reads, empty/error states, and legacy-JWT-protected workspace actions are backend-backed; no “Yakında” placeholder represents calendars.
+Definition of done: calendar navigation, public reads, empty/error states, and legacy-JWT-protected workspace actions are backend-backed; no “Coming soon” placeholder represents calendars.
 
 ## A7. Align event creation with the final supported contract — COMPLETE
 

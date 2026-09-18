@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { ArrowLeft, MapPin } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -13,13 +14,26 @@ export const dynamic = "force-dynamic";
 
 type PlacePageProps = { params: Promise<{ id: string }> };
 
+export async function generateMetadata({ params }: PlacePageProps): Promise<Metadata> {
+  const { id } = await params;
+  try {
+    const place = await fetchPlace(id);
+    return {
+      title: place.name,
+      description: place.description.trim().slice(0, 160) || "Public NIMNear place",
+    };
+  } catch {
+    return { title: "Place" };
+  }
+}
+
 function PlaceError() {
   return (
     <div className="min-h-svh bg-background">
       <AppHeader />
       <main className="mx-auto max-w-[1120px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <Link href="/" className="mb-6 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Keşfet</Link>
-        <StateCard kind="error" title="Yer yüklenemedi" description="Yer servisine şu anda ulaşılamıyor." />
+        <Link href="/" className="mb-6 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Discover</Link>
+        <StateCard kind="error" title="Place could not be loaded" description="The place service is currently unavailable." />
       </main>
     </div>
   );
@@ -55,17 +69,17 @@ export default async function PlacePage({ params }: PlacePageProps) {
   try {
     events = await fetchEvents({ place_id: id, from: new Date().toISOString(), limit: 100 });
   } catch (error) {
-    eventsError = error instanceof EventsApiError ? error.message : "Etkinlik servisine şu anda ulaşılamıyor.";
+    eventsError = error instanceof EventsApiError ? error.message : "The event service is currently unavailable.";
   }
 
   return (
     <div className="min-h-svh bg-background">
       <AppHeader />
       <main className="mx-auto max-w-[1120px] space-y-8 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <Link href="/" className="inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Keşfet</Link>
+        <Link href="/" className="inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Discover</Link>
         <PlaceHero place={place} />
         <section className="space-y-4">
-          <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Etkinlikler</p><h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Bu yerde yaklaşan etkinlikler</h2></div>
+          <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Events</p><h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Upcoming events at this place</h2></div>
           <EventTimeline events={events} error={eventsError} />
         </section>
       </main>
