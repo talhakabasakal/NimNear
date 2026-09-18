@@ -478,6 +478,40 @@ func TestConfigValidate_ProductionRequiresRedisAndCanonicalOrigin(t *testing.T) 
 	assert.Contains(t, err.Error(), "CORS_ALLOWED_ORIGINS")
 }
 
+func TestConfigValidate_ProductionAllowsTemporaryVercelOrigin(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Server.PublicOrigin = "https://nim-near.vercel.app"
+	cfg.Server.CORSAllowedOrigins = []string{"https://nim-near.vercel.app"}
+	assert.NoError(t, cfg.Validate())
+
+	cfg = validProductionConfig()
+	cfg.Server.PublicOrigin = "https://preview-other.vercel.app"
+	cfg.Server.CORSAllowedOrigins = []string{"https://preview-other.vercel.app"}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NIMNEAR_PUBLIC_ORIGIN")
+
+	cfg = validProductionConfig()
+	cfg.Server.PublicOrigin = "http://nim-near.vercel.app"
+	cfg.Server.CORSAllowedOrigins = []string{"http://nim-near.vercel.app"}
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NIMNEAR_PUBLIC_ORIGIN")
+
+	cfg = validProductionConfig()
+	cfg.Server.PublicOrigin = "https://localhost"
+	cfg.Server.CORSAllowedOrigins = []string{"https://localhost"}
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NIMNEAR_PUBLIC_ORIGIN")
+
+	cfg = validProductionConfig()
+	cfg.Server.PublicOrigin = "https://nim-near.vercel.app"
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "CORS_ALLOWED_ORIGINS")
+}
+
 func TestPaymentConfigValidate_RejectsInvalidMerchantChecksum(t *testing.T) {
 	cfg := PaymentConfig{
 		NimiqNetwork:    "TestAlbatross",

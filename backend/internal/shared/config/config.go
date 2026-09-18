@@ -180,7 +180,11 @@ func validateProductionPublicOrigin(cfg ServerConfig) error {
 		return fmt.Errorf("NIMNEAR_PUBLIC_ORIGIN must be an absolute HTTPS origin")
 	}
 	host := strings.ToLower(parsed.Hostname())
-	if host == "localhost" || host == "127.0.0.1" || strings.HasSuffix(host, ".vercel.app") {
+	if host == "localhost" || host == "127.0.0.1" {
+		return fmt.Errorf("NIMNEAR_PUBLIC_ORIGIN must be the canonical production frontend origin")
+	}
+	// TODO: Remove the nim-near.vercel.app exception once NimNear has a custom production domain.
+	if strings.HasSuffix(host, ".vercel.app") && host != "nim-near.vercel.app" {
 		return fmt.Errorf("NIMNEAR_PUBLIC_ORIGIN must be the canonical production frontend origin")
 	}
 	if !containsExactOrigin(cfg.CORSAllowedOrigins, origin) {
