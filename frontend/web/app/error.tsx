@@ -24,7 +24,7 @@ export default function AppError({
         <StateCard
           kind="error"
           title="Something went wrong"
-          description="This page could not be loaded. Try again, or return to Discover."
+          description="This page could not be loaded. Try again, or return to Events."
         />
         <div className="mt-5 flex flex-wrap justify-center gap-3">
           <button
@@ -35,7 +35,7 @@ export default function AppError({
             Try again
           </button>
           <Link href="/" className="inline-flex h-11 items-center rounded-lg px-4 text-sm font-medium text-muted hover:text-foreground">
-            Back to Discover
+            Back to Events
           </Link>
         </div>
       </div>

@@ -32,7 +32,7 @@ function PlaceError() {
     <div className="min-h-svh bg-background">
       <AppHeader />
       <main className="mx-auto max-w-[1120px] px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <Link href="/" className="mb-6 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Discover</Link>
+        <Link href="/" className="mb-6 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Events</Link>
         <StateCard kind="error" title="Place could not be loaded" description="The place service is currently unavailable." />
       </main>
     </div>
@@ -76,7 +76,7 @@ export default async function PlacePage({ params }: PlacePageProps) {
     <div className="min-h-svh bg-background">
       <AppHeader />
       <main className="mx-auto max-w-[1120px] space-y-8 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <Link href="/" className="inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Discover</Link>
+        <Link href="/" className="inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Events</Link>
         <PlaceHero place={place} />
         <section className="space-y-4">
           <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Events</p><h2 className="mt-1 text-xl font-semibold tracking-[-0.025em] text-foreground">Upcoming events at this place</h2></div>

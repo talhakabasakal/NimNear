@@ -30,14 +30,21 @@ test("a successful API response preserves only its returned records", () => {
   assert.equal(state.records, records);
 });
 
-test("the homepage labels the backend feed as upcoming, not popular", () => {
+test("the homepage is the events feed and does not claim popularity", () => {
   const page = fs.readFileSync(
     new URL("../app/page.tsx", import.meta.url),
     "utf8",
   );
+  const feed = fs.readFileSync(
+    new URL("../components/events/events-feed-page.tsx", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(page, /Upcoming events/);
-  assert.doesNotMatch(page, /Popular events|popular|popularity|trending/i);
+  assert.match(page, /EventsFeedPage/);
+  assert.match(feed, /EventTimeline/);
+  assert.match(feed, />Upcoming</);
+  assert.doesNotMatch(feed, /Popular events|popular|popularity|trending/i);
+  assert.doesNotMatch(feed, /DiscoverHero|NearbyPlaceDiscovery/);
 });
 
 test("geolocation errors stay distinct", () => {
@@ -56,8 +63,8 @@ test("nearby API errors and empty results remain distinct", () => {
 });
 
 test("calendar navigation and surface are backend-backed, not a placeholder", () => {
-  const header = fs.readFileSync(
-    new URL("../components/app/app-header.tsx", import.meta.url),
+  const navigation = fs.readFileSync(
+    new URL("../lib/app/navigation.ts", import.meta.url),
     "utf8",
   );
   const page = fs.readFileSync(
@@ -65,7 +72,7 @@ test("calendar navigation and surface are backend-backed, not a placeholder", ()
     "utf8",
   );
 
-  assert.match(header, /href: "\/calendars", label: "Calendars"/);
+  assert.match(navigation, /href: "\/calendars", label: "Calendars"/);
   assert.match(page, /fetchCalendars/);
   assert.match(page, /No public calendars yet/);
   assert.doesNotMatch(

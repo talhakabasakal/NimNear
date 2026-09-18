@@ -24,7 +24,7 @@ export default async function CalendarsPage() {
       <AppHeader />
       <main className="mx-auto max-w-[1120px] space-y-10 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
         <div>
-          <Link href="/" className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Discover</Link>
+          <Link href="/" className="mb-5 inline-flex items-center gap-2 text-xs font-medium text-muted transition-colors hover:text-foreground"><ArrowLeft size={14} /> Events</Link>
           <div className="flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-accent"><CalendarDays size={19} /></span><div><p className="text-xs font-medium uppercase tracking-[0.15em] text-accent">Community</p><h1 className="mt-1 text-3xl font-semibold tracking-[-0.035em] text-foreground">Calendars</h1></div></div>
           <p className="mt-3 max-w-xl text-sm leading-6 text-muted">Discover public event calendars from communities.</p>
         </div>

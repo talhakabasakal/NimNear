@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Check, Copy } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
@@ -212,24 +213,32 @@ export function AccountProfile({
         </div>
 
         {compactAddress ? (
-          <div className="mt-4 flex items-center gap-3 rounded-xl bg-background px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
-                Wallet address
-              </p>
-              <p className="mt-0.5 truncate font-mono text-[13px] text-foreground">
-                {compactAddress}
-              </p>
+          <>
+            <div className="mt-4 flex items-center gap-3 rounded-xl bg-background px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
+                  Wallet address
+                </p>
+                <p className="mt-0.5 truncate font-mono text-[13px] text-foreground">
+                  {compactAddress}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void copyAddress()}
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-hover"
+              >
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+                {copied ? "Copied" : "Copy"}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => void copyAddress()}
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-surface-hover"
+            <Link
+              href="/wallet"
+              className="mt-3 inline-flex text-xs font-medium text-accent transition-colors hover:text-foreground"
             >
-              {copied ? <Check size={13} /> : <Copy size={13} />}
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
+              View wallet
+            </Link>
+          </>
         ) : null}
       </section>
 

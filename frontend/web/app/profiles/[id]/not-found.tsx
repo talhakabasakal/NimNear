@@ -10,7 +10,7 @@ export default function NotFound() {
       <main className="mx-auto max-w-[1000px] px-4 py-8 sm:px-6 lg:px-8">
         <StateCard kind="empty" title="Profile not found" description="This profile does not exist or is no longer public." />
         <Link href="/" className="mt-5 block text-center text-xs font-medium text-accent hover:text-foreground">
-          Back to Discover
+          Back to Events
         </Link>
       </main>
     </div>
