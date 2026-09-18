@@ -6,6 +6,10 @@ import {
 } from "../api/payment-requests";
 import { parseBalanceLunas } from "../nimiq/amount";
 import {
+  markHubPaymentSubmitted,
+  runHubPaymentSubmitOnce,
+} from "../nimiq/payment-transport";
+import {
   createSingleFlight,
   NimiqTransactionError,
 } from "../nimiq/transactions";
@@ -108,16 +112,23 @@ export function createPaymentRequestFlight() {
   }>();
 }
 
+class PaymentRequestRedirected extends Error {
+  constructor() {
+    super("hub-checkout-redirect");
+    this.name = "PaymentRequestRedirected";
+  }
+}
+
 export async function executePaymentRequestPay(input: {
   request: Pick<PublicPaymentRequest, "public_id" | "recipient" | "amount_lunas" | "status">;
   locallyExpired: boolean;
   existingHash?: string | null;
-  sendTransaction: (recipient: string, valueLunas: bigint) => Promise<string>;
+  sendTransaction: (recipient: string, valueLunas: bigint) => Promise<string | undefined>;
   submitHash: (publicId: string, hash: string) => Promise<PaymentRequestRecord>;
   flight: ReturnType<typeof createPaymentRequestFlight>;
 }): Promise<
   | { ok: true; hash: string; record: PaymentRequestRecord; localStatus: PaymentRequestStatus }
-  | { ok: false; kind: "cancelled" | "conflict" | "blocked" | "error"; hash?: string; error?: unknown }
+  | { ok: false; kind: "cancelled" | "conflict" | "blocked" | "error" | "redirected"; hash?: string; error?: unknown }
 > {
   if (!canInvokePaymentSend(input.request.status, input.locallyExpired) && !input.existingHash) {
     return { ok: false, kind: "blocked" };
@@ -129,13 +140,23 @@ export async function executePaymentRequestPay(input: {
   try {
     const result = await input.flight.run(async () => {
       if (!hash) {
-        hash = await input.sendTransaction(sdk.recipient, sdk.valueLunas);
+        const sent = await input.sendTransaction(sdk.recipient, sdk.valueLunas);
+        if (!sent) {
+          throw new PaymentRequestRedirected();
+        }
+        hash = sent;
       }
-      const record = await input.submitHash(input.request.public_id, hash);
-      return { hash, record, localStatus: record.status };
+      return runHubPaymentSubmitOnce(input.request.public_id, hash, async () => {
+        const record = await input.submitHash(input.request.public_id, hash);
+        markHubPaymentSubmitted(hash);
+        return { hash, record, localStatus: record.status };
+      });
     });
     return { ok: true, ...result };
   } catch (error) {
+    if (error instanceof PaymentRequestRedirected) {
+      return { ok: false, kind: "redirected" };
+    }
     if (error instanceof NimiqTransactionError && error.kind === "cancelled") {
       return { ok: false, kind: "cancelled", error };
     }

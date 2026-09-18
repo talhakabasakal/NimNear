@@ -22,14 +22,21 @@ import {
   submitPurchaseTransaction,
   type PurchaseRecord,
 } from "@/lib/api/purchases";
+import { prepareNimiqHub } from "@/lib/auth/nimiq";
+import {
+  createEventPurchaseFlight,
+  executeEventPurchasePay,
+  resumeHubPaidResource,
+} from "@/lib/events/purchase-pay";
+import {
+  clearPendingHubPayment,
+  detectNimiqPaymentTransport,
+  paymentTransportLabel,
+  prepareNimiqPayment,
+} from "@/lib/nimiq/payment-transport";
+import { NimiqTransactionError } from "@/lib/nimiq/transactions";
 import { subscribeRealtime } from "@/lib/realtime/client";
 import { createCoalescer, eventTouchesResource, isEventPurchaseEvent } from "@/lib/realtime/events";
-import { paymentNetworkMatchesDeployment } from "@/lib/auth/nimiq-network";
-import {
-  initializeMiniAppProvider,
-  NimiqTransactionError,
-  sendBasicNimTransaction,
-} from "@/lib/nimiq/transactions";
 
 type EventPurchaseProps = {
   eventId: string;
@@ -68,15 +75,6 @@ function isWalletRejection(error: unknown) {
   return text.includes("reject") || text.includes("cancel") || text.includes("denied") || text.includes("permission");
 }
 
-function parseSafeLuna(value: string) {
-  if (!/^[0-9]+$/.test(value)) throw new Error("The payment amount is not a safe integer.");
-  const lunas = BigInt(value);
-  if (lunas <= BigInt(0) || lunas > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error("The payment amount is outside the supported safe number range.");
-  }
-  return lunas;
-}
-
 function verificationMessage(state: ViewState) {
   if (state === "submitted") return "Transaction submitted to the network. Verification pending.";
   return "Payment is being verified. This status will update when the transaction is finalized.";
@@ -88,7 +86,13 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
   const [purchase, setPurchase] = useState<PurchaseRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [transport, setTransport] = useState<ReturnType<typeof detectNimiqPaymentTransport> | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flight = useRef(createEventPurchaseFlight());
+
+  useEffect(() => {
+    setTransport(detectNimiqPaymentTransport());
+  }, []);
 
   useEffect(() => {
     if (isPast) {
@@ -105,6 +109,8 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
 
     let active = true;
     async function restore() {
+      prepareNimiqHub();
+      prepareNimiqPayment();
       try {
         const user = await fetchCurrentUser();
         const current = await fetchCurrentPurchase(eventId);
@@ -114,6 +120,29 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
         setSession(refreshed);
         setPurchase(current);
         setError(null);
+
+        const inFlight = current && (current.status === "submitted" || current.status === "verifying" || current.status === "confirmed");
+        if (current && inFlight) {
+          clearPendingHubPayment();
+          setState(stateForPurchase(current));
+          return;
+        }
+
+        if (current?.status === "pending") {
+          const resumed = await resumeHubPaidResource({
+            kind: "event-purchase",
+            id: current.id,
+            submitHash: submitPurchaseTransaction,
+            alreadySubmitted: false,
+          });
+          if (!active) return;
+          if (resumed) {
+            setPurchase(resumed.record);
+            setState(stateForPurchase(resumed.record));
+            return;
+          }
+        }
+
         setState(stateForPurchase(current));
       } catch (requestError) {
         if (!active) return;
@@ -124,6 +153,8 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
           clearAuthSession();
           setSession(null);
           setState("anonymous");
+        } else if (isWalletRejection(requestError)) {
+          setState("rejected");
         } else {
           setError(requestError instanceof Error ? requestError.message : "Payment status could not be retrieved.");
           setState("load-error");
@@ -276,21 +307,16 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
       }
 
       const instructions = await fetchPaymentInstructions(current.id);
-      if (!paymentNetworkMatchesDeployment(instructions.network)) {
-        throw new Error("Payment network does not match this Nimiq deployment.");
-      }
-      const amount = parseSafeLuna(instructions.amount_lunas);
-      const provider = await initializeMiniAppProvider();
-
       setState("wallet");
-      const hash = await sendBasicNimTransaction(
-        { recipient: instructions.recipient, valueLunas: amount },
-        (tx) => provider.sendBasicTransaction(tx),
-      );
-
-      const submitted = await submitPurchaseTransaction(current.id, hash);
-      setPurchase(submitted);
-      setState(stateForPurchase(submitted));
+      const result = await executeEventPurchasePay({
+        purchaseId: current.id,
+        instructions,
+        submitHash: submitPurchaseTransaction,
+        flight: flight.current,
+      });
+      if (result.redirected) return;
+      setPurchase(result.record);
+      setState(stateForPurchase(result.record));
     } catch (requestError) {
       if (isWalletRejection(requestError)) {
         setState("rejected");
@@ -333,13 +359,16 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
     <section className="rounded-xl border border-border bg-surface p-5">
       <p className="text-xs font-medium uppercase tracking-[0.16em] text-accent">Payment</p>
       <p className="mt-2 text-sm leading-6 text-muted">
-        {state === "rejected" ? "The transaction was cancelled in the wallet. You can try again." : "Pay securely with Nimiq Pay."}
+        {state === "rejected" ? "The transaction was cancelled in the wallet. You can try again." : "Pay securely with Nimiq."}
+      </p>
+      <p className="mt-1 text-[11px] uppercase tracking-[0.12em] text-muted">
+        {transport ? paymentTransportLabel(transport) : "Nimiq"}
       </p>
       {isSoldOut ? (
         <Button type="button" variant="outline" disabled className="mt-4 w-full">Sold out</Button>
       ) : (
         <Button type="button" disabled={state === "preparing" || state === "wallet"} onClick={() => { void handlePurchase(); }} className="mt-4 w-full">
-          {state === "preparing" ? "Preparing…" : state === "wallet" ? "Waiting for Nimiq Pay approval…" : "Purchase"}
+          {state === "preparing" ? "Preparing…" : state === "wallet" ? "Waiting for wallet approval…" : "Purchase"}
         </Button>
       )}
       {error ? <p className="mt-3 text-xs leading-5 text-red-200">{error}</p> : null}

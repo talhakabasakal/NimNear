@@ -6,6 +6,7 @@ import {
   type NimiqProvider,
   type SignatureResult,
 } from "@nimiq/mini-app-sdk";
+import { normalizeTransactionHash } from "@/lib/nimiq/transactions";
 
 import {
   AuthApiError,
@@ -22,6 +23,7 @@ export {
   resolveNimiqAuthConfig,
 } from "@/lib/auth/nimiq-network";
 export const NIMIQ_HUB_PUBLIC_METHODS = ["chooseAddress", "signMessage"] as const;
+export const NIMIQ_HUB_PAYMENT_METHODS = ["checkout"] as const;
 const APP_NAME = "NIMNear";
 const PENDING_HUB_KEY = "nimnear.auth.hub.pending";
 const SELECTED_HUB_ADDRESS_KEY = "nimnear.auth.hub.selectedAddress";
@@ -86,6 +88,8 @@ export type PendingHubAuthentication = {
 export type HubRedirectResult =
   | { type: "address"; address: string; label?: string }
   | { type: "signature"; signed: SignedMessage }
+  | { type: "checkout"; hash: string }
+  | { type: "checkout-error"; error: unknown }
   | { type: "error"; error: unknown; stage: AuthStage }
   | { type: "empty" };
 
@@ -137,6 +141,16 @@ function getHubApi() {
     hubApiEndpoint = network.hubEndpoint;
   }
   return hubApi;
+}
+
+export function getNimiqHubApi() {
+  return getHubApi();
+}
+
+export function isHubPaymentRedirect(
+  result: HubRedirectResult,
+): result is Extract<HubRedirectResult, { type: "checkout" } | { type: "checkout-error" }> {
+  return result.type === "checkout" || result.type === "checkout-error";
 }
 
 function currentHubAuthIdentity(): HubAuthIdentity | null {
@@ -258,18 +272,44 @@ function isChosenHubAddress(value: unknown): value is { address: string; label?:
   return Boolean(value && typeof value === "object" && "address" in value && typeof (value as { address: unknown }).address === "string");
 }
 
+function isSignedHubTransaction(value: unknown): value is { hash: string } {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { hash?: unknown; serializedTx?: unknown; raw?: unknown; success?: unknown };
+  if (record.success === true && record.hash == null) return false;
+  return typeof record.hash === "string" && (typeof record.serializedTx === "string" || record.raw != null || Boolean(normalizeTransactionHash(record.hash)));
+}
+
+function checkoutHashFromResult(value: unknown): string | null {
+  if (!isSignedHubTransaction(value)) return null;
+  return normalizeTransactionHash(value.hash);
+}
+
 function hubAccountLabel(value: { label?: string; meta?: { account?: { label?: string } } } | null | undefined): string | undefined {
   const label = value?.meta?.account?.label?.trim() || value?.label?.trim();
   return label || undefined;
 }
 
+function hubRpcErrorValue(result: unknown) {
+  if (result && typeof result === "object" && "message" in result) {
+    return new Error(String((result as { message: unknown }).message));
+  }
+  return result instanceof Error ? result : new Error(typeof result === "string" ? result : "The Hub request was cancelled.");
+}
+
 function interpretHubRpcResult(command: string | null, status: "ok" | "error", result: unknown): HubRedirectResult {
   if (status === "error") {
+    if (command === HubApi.RequestType.CHECKOUT) {
+      return { type: "checkout-error", error: hubRpcErrorValue(result) };
+    }
     const stage: AuthStage = command === HubApi.RequestType.SIGN_MESSAGE ? "requesting-signature" : "requesting-wallet";
-    const errorValue = result && typeof result === "object" && "message" in result
-      ? new Error(String((result as { message: unknown }).message))
-      : result;
-    return { type: "error", error: wrapWalletError(stage, errorValue instanceof Error ? errorValue : new Error(typeof result === "string" ? result : "The Hub request was cancelled.")), stage };
+    return { type: "error", error: wrapWalletError(stage, hubRpcErrorValue(result)), stage };
+  }
+  if (command === HubApi.RequestType.CHECKOUT || isSignedHubTransaction(result)) {
+    const hash = checkoutHashFromResult(result);
+    if (!hash) {
+      return { type: "checkout-error", error: new Error("The Hub checkout result did not include a transaction hash.") };
+    }
+    return { type: "checkout", hash };
   }
   if (command === HubApi.RequestType.SIGN_MESSAGE || isSignedHubMessage(result)) {
     if (!isSignedHubMessage(result)) return { type: "empty" };
@@ -643,6 +683,9 @@ export function consumeHubRedirect(client: HubRedirectClient = getHubApi()): Pro
       client.on(HubApi.RequestType.SIGN_MESSAGE, (result) => {
         finish({ type: "signature", signed: result });
       }, (error) => finish({ type: "error", error: wrapWalletError("requesting-signature", error), stage: "requesting-signature" }));
+      client.on(HubApi.RequestType.CHECKOUT, (result) => {
+        finish(interpretHubRpcResult(HubApi.RequestType.CHECKOUT, "ok", result));
+      }, (error) => finish({ type: "checkout-error", error }));
       void client.checkRedirectResponse()
         .then(() => {
           queueMicrotask(() => finish({ type: "empty" }));

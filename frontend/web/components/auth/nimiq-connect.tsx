@@ -24,6 +24,7 @@ import {
   detectNimiqAuthTransport,
   finishHubSignature,
   hasHubUiIntent,
+  isHubPaymentRedirect,
   isMiniAppHost,
   NimiqAuthError,
   prepareNimiqHub,
@@ -103,6 +104,10 @@ export function NimiqConnect({
 
         const redirected = await takeHubRedirectResult();
         if (!active) return;
+        if (isHubPaymentRedirect(redirected)) {
+          setStage("idle");
+          return;
+        }
         if (redirected.type === "error") {
           showError(redirected.error);
           setIsOpen(true);

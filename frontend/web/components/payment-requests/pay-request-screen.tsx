@@ -20,8 +20,9 @@ import {
   restoreAuthSession,
   type AuthSession,
 } from "@/lib/api/auth";
-import { detectNimiqAuthTransport } from "@/lib/auth/nimiq";
+import { prepareNimiqHub } from "@/lib/auth/nimiq";
 import { paymentNetworkMatchesDeployment } from "@/lib/auth/nimiq-network";
+import { resumeHubPaidResource } from "@/lib/events/purchase-pay";
 import {
   canInvokePaymentSend,
   consumePaymentRequestResume,
@@ -47,11 +48,12 @@ import {
 } from "@/lib/realtime/events";
 import { subscribeRealtime } from "@/lib/realtime/client";
 import {
-  initializeMiniAppProvider,
-  NimiqTransactionError,
-  sendBasicNimTransaction,
-  userMessageForTransactionFailure,
-} from "@/lib/nimiq/transactions";
+  detectNimiqPaymentTransport,
+  paymentTransportLabel,
+  prepareNimiqPayment,
+  sendNimiqPayment,
+} from "@/lib/nimiq/payment-transport";
+import { NimiqTransactionError, userMessageForTransactionFailure } from "@/lib/nimiq/transactions";
 import { formatWalletNetwork } from "@/lib/wallet/send";
 import { formatNimAmount } from "@/lib/wallet/activity";
 
@@ -72,10 +74,11 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [submittedHash, setSubmittedHash] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [miniAppAvailable, setMiniAppAvailable] = useState<boolean | null>(null);
+  const [transport, setTransport] = useState<ReturnType<typeof detectNimiqPaymentTransport> | null>(null);
   const [pollExhausted, setPollExhausted] = useState(false);
   const flight = useRef(createPaymentRequestFlight());
   const pollTimers = useRef<number[]>([]);
+  const pendingHubPoll = useRef(false);
 
   const clearPollTimers = useCallback(() => {
     for (const timer of pollTimers.current) window.clearTimeout(timer);
@@ -106,7 +109,9 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
   }, [publicId, step]);
 
   useEffect(() => {
-    setMiniAppAvailable(detectNimiqAuthTransport() === "mini-app");
+    prepareNimiqHub();
+    prepareNimiqPayment();
+    setTransport(detectNimiqPaymentTransport());
     let active = true;
     async function boot() {
       const stored = readAuthSession();
@@ -121,6 +126,30 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
         const resume = consumePaymentRequestResume(publicId);
         if (resume && (restored ?? stored)?.user.wallet_address && isPayableStatus(next.status)) {
           setStep("review");
+        }
+        if ((restored ?? stored) && isPayableStatus(next.status) && !isInFlightStatus(next.status)) {
+          const resumed = await resumeHubPaidResource({
+            kind: "payment-request",
+            id: publicId,
+            submitHash: submitPaymentRequestTransaction,
+            alreadySubmitted: false,
+          });
+          if (!active) return;
+          if (resumed) {
+            setSubmittedHash(resumed.hash);
+            setRequest({
+              public_id: resumed.record.public_id,
+              recipient: resumed.record.recipient,
+              amount_lunas: resumed.record.amount_lunas,
+              amount_nim: resumed.record.amount_nim,
+              note: resumed.record.note,
+              status: statusAfterClientHash(resumed.record.status),
+              expires_at: resumed.record.expires_at,
+              network: resumed.record.network,
+            });
+            setStep("submitted");
+            pendingHubPoll.current = true;
+          }
         }
       } catch (error) {
         if (!active) return;
@@ -177,6 +206,12 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
   }, [clearPollTimers, refreshRequest]);
 
   useEffect(() => () => clearPollTimers(), [clearPollTimers]);
+
+  useEffect(() => {
+    if (step !== "submitted" || !pendingHubPoll.current) return;
+    pendingHubPoll.current = false;
+    startStatusPoll();
+  }, [startStatusPoll, step]);
 
   useEffect(() => {
     if (!session) return;
@@ -240,10 +275,6 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
       setNotice("Payment network does not match this Nimiq deployment.");
       return;
     }
-    if (miniAppAvailable === false) {
-      setNotice("Open this payment request in Nimiq Pay to complete the payment.");
-      return;
-    }
     setNotice(null);
     setStep("approving");
     const result = await executePaymentRequestPay({
@@ -252,14 +283,18 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
       existingHash: submittedHash,
       flight: flight.current,
       sendTransaction: async (recipient, valueLunas) => {
-        const provider = await initializeMiniAppProvider();
-        return sendBasicNimTransaction(
-          { recipient, valueLunas },
-          (tx) => provider.sendBasicTransaction(tx),
-        );
+        return sendNimiqPayment({
+          recipient,
+          amountLunas: valueLunas,
+          network: request.network,
+          resume: { kind: "payment-request", id: request.public_id },
+        });
       },
       submitHash: submitPaymentRequestTransaction,
     });
+    if (result.ok === false && result.kind === "redirected") {
+      return;
+    }
     if (result.hash) setSubmittedHash(result.hash);
     if (result.ok) {
       setSubmittedHash(result.hash);
@@ -457,13 +492,12 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
             <p className="text-sm leading-6 text-muted" role="status">
               {notice}
             </p>
-          ) : miniAppAvailable === false ? (
-            <p className="text-sm leading-6 text-muted" role="status">
-              Open this payment request in Nimiq Pay to complete the payment.
-            </p>
           ) : (
             <p className="text-sm leading-6 text-muted">
-              Confirm in Nimiq Pay to sign this exact amount. NIMNear never handles private keys.
+              Pay securely with Nimiq. NIMNear never handles private keys.
+              <span className="mt-1 block text-[11px] uppercase tracking-[0.12em]">
+                {transport ? paymentTransportLabel(transport) : "Nimiq"}
+              </span>
             </p>
           )}
           <div className="grid grid-cols-2 gap-3">
@@ -472,11 +506,11 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
             </Button>
             <Button
               type="button"
-              disabled={busy || miniAppAvailable === false}
-              aria-disabled={busy || miniAppAvailable === false}
+              disabled={busy}
+              aria-disabled={busy}
               onClick={() => void confirmPay()}
             >
-              {busy ? "Waiting for Nimiq Pay…" : "Confirm in Nimiq Pay"}
+              {busy ? "Waiting for wallet approval…" : "Confirm payment"}
             </Button>
           </div>
         </section>
