@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AppNav } from "@/components/app/app-nav";
 import { ProfileButton } from "@/components/app/profile-button";
 import { ThemeToggle } from "@/components/app/theme-toggle";
+import { NimiqConnect } from "@/components/auth/nimiq-connect";
 
 export function AppHeader() {
   return (
@@ -27,6 +28,7 @@ export function AppHeader() {
           <ProfileButton />
         </div>
       </div>
+      <NimiqConnect restoreOnly hideWhenAuthenticated />
     </header>
   );
 }

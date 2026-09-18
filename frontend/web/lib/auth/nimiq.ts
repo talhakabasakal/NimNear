@@ -6,7 +6,9 @@ import {
   type NimiqProvider,
   type SignatureResult,
 } from "@nimiq/mini-app-sdk";
+import { RedirectRpcClient } from "@nimiq/rpc";
 import { normalizeTransactionHash } from "@/lib/nimiq/transactions";
+import { PUBLIC_NODE_ENV } from "@/lib/auth/nimiq-public-env";
 
 import {
   AuthApiError,
@@ -61,16 +63,31 @@ export type AuthStage =
   | "authenticated";
 
 export class NimiqAuthError extends Error {
+  override readonly cause?: unknown;
   constructor(
     public readonly stage: AuthStage,
     public readonly code: string,
     message: string,
     public readonly cancelled = false,
+    cause?: unknown,
   ) {
     super(message);
     this.name = "NimiqAuthError";
+    if (cause !== undefined) this.cause = cause;
   }
 }
+
+export type HubAuthFailureDiagnostics = {
+  errorName: string;
+  errorMessage: string;
+  requestPhase: string;
+  hubEndpoint: string;
+  pathname: string;
+  returnUrl: string;
+  network: string;
+  environment: string;
+  consensus: string;
+};
 
 export type MiniAppWallet = {
   transport: "mini-app";
@@ -118,6 +135,7 @@ let redirectWaiter: Promise<HubRedirectResult> | null = null;
 let capturedHubRedirect: HubRedirectResult | null = null;
 let capturedHubRedirectRead = false;
 let hubSignRedirectStarted = false;
+let hubReturnRestoreClaimed = false;
 const challengeInFlight = new Map<string, Promise<PendingHubAuthentication>>();
 let verificationInFlight: Promise<AuthSession> | null = null;
 
@@ -236,7 +254,22 @@ export function hubRedirectBehavior(localState: Record<string, string> = {}) {
   if (typeof window === "undefined") {
     throw new NimiqAuthError("requesting-wallet", "browser_required", "Nimiq Hub is only available in a browser.");
   }
-  return new HubApi.RedirectRequestBehavior(hubReturnUrl(), localState);
+  const returnUrl = hubReturnUrl();
+  const behavior = new HubApi.RedirectRequestBehavior(returnUrl, localState);
+  // Hub's default redirect sets history.replaceState({...Next.js state, rpcBackRejectionId})
+  // before navigating. Next.js App Router history state can throw DataCloneError, and Back
+  // then rejects with "Request aborted" which used to surface as "wallet could not be reached".
+  behavior.request = async (endpoint, command, args) => {
+    const client = new RedirectRpcClient(endpoint, new URL(endpoint).origin);
+    await client.init();
+    client.call(
+      returnUrl,
+      command,
+      { handleHistoryBack: false, state: { ...localState, __command: command } },
+      ...(await Promise.all(Array.from(args))),
+    );
+  };
+  return behavior;
 }
 
 function parseHubRpcJson(raw: string): unknown {
@@ -392,7 +425,53 @@ function isErrorResponse(value: unknown): value is ErrorResponse {
 
 function isCancellationText(value: string) {
   const normalized = value.toLowerCase();
-  return normalized.includes("cancel") || normalized.includes("reject") || normalized.includes("denied") || normalized.includes("permission");
+  return (
+    normalized.includes("cancel") ||
+    normalized.includes("reject") ||
+    normalized.includes("denied") ||
+    normalized.includes("permission") ||
+    normalized.includes("abort") ||
+    normalized.includes("closed")
+  );
+}
+
+function publicHubReturnUrl() {
+  if (typeof window === "undefined") return "";
+  try {
+    const url = new URL(nimiqHubReturnUrl());
+    for (const key of [...url.searchParams.keys()]) {
+      if (/token|secret|signature|jwt|cookie|key/i.test(key)) url.searchParams.delete(key);
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return window.location.pathname;
+  }
+}
+
+export function hubAuthFailureDiagnostics(
+  stage: AuthStage,
+  error: unknown,
+  phase: string,
+): HubAuthFailureDiagnostics {
+  const network = resolveNimiqAuthConfig();
+  const original = error instanceof Error ? { name: error.name, message: error.message } : { name: "Unknown", message: String(error) };
+  return {
+    errorName: original.name,
+    errorMessage: original.message,
+    requestPhase: phase,
+    hubEndpoint: network.ok ? network.hubEndpoint : "unconfigured",
+    pathname: typeof window !== "undefined" ? window.location.pathname : "",
+    returnUrl: publicHubReturnUrl(),
+    network: network.ok ? network.network : "",
+    environment: network.ok ? network.environment : "",
+    consensus: network.ok ? network.consensusName : "",
+  };
+}
+
+function logHubAuthFailure(stage: AuthStage, error: unknown, phase: string) {
+  if (PUBLIC_NODE_ENV === "production") return;
+  console.info("[auth] hub failure", hubAuthFailureDiagnostics(stage, error, phase));
 }
 
 function configuredHubLabel() {
@@ -405,17 +484,20 @@ function wrapWalletError(stage: AuthStage, error: unknown): NimiqAuthError {
   if (error instanceof AuthApiError) {
     const cancelled = error.status === 401 && isCancellationText(error.message);
     const code = error.code || (error.status === 410 ? "challenge_expired" : error.status === 409 ? "challenge_already_used" : "auth_api_error");
-    return new NimiqAuthError(stage, code, error.message || "Authentication request failed.", cancelled);
+    return new NimiqAuthError(stage, code, error.message || "Authentication request failed.", cancelled, error);
   }
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
-  if (isCancellationText(text)) return new NimiqAuthError(stage, "wallet_cancelled", "The wallet transaction was cancelled.", true);
+  if (isCancellationText(text)) {
+    return new NimiqAuthError(stage, "wallet_cancelled", "The wallet transaction was cancelled.", true, error);
+  }
   if (text.toLowerCase().includes("popup")) {
-    return new NimiqAuthError(stage, "popup_blocked", "The browser blocked the Hub window. Allow popups and try again.");
+    return new NimiqAuthError(stage, "popup_blocked", "The browser blocked the Hub window. Allow popups and try again.", false, error);
   }
   if (text.toLowerCase().includes("invalid request")) {
-    return new NimiqAuthError(stage, "hub_invalid_request", `The Nimiq Hub request is invalid. Try the ${configuredHubLabel()} redirect again.`);
+    return new NimiqAuthError(stage, "hub_invalid_request", `The Nimiq Hub request is invalid. Try the ${configuredHubLabel()} redirect again.`, false, error);
   }
-  return new NimiqAuthError(stage, "wallet_unavailable", "The Nimiq wallet could not be reached.");
+  logHubAuthFailure(stage, error, stage);
+  return new NimiqAuthError(stage, "wallet_unavailable", "The Nimiq wallet could not be reached.", false, error);
 }
 
 export function selectNimiqAuthTransport(host: { hasNimiqPay: boolean; hasNimiqProvider: boolean; hostLanguage?: string }): NimiqAuthTransport {
@@ -709,6 +791,17 @@ export function resetHubRedirectConsumption() {
   challengeInFlight.clear();
   hubApi = null;
   hubApiEndpoint = null;
+  hubReturnRestoreClaimed = false;
+}
+
+export function claimHubReturnRestore() {
+  if (hubReturnRestoreClaimed) return false;
+  hubReturnRestoreClaimed = true;
+  return true;
+}
+
+export function releaseHubReturnRestore() {
+  hubReturnRestoreClaimed = false;
 }
 
 async function submitVerification(

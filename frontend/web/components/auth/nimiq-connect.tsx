@@ -18,6 +18,7 @@ import {
 import {
   authenticateMiniApp,
   beginHubAuthentication,
+  claimHubReturnRestore,
   clearHubUiIntent,
   completeHubAuthentication,
   createHubChallenge,
@@ -30,6 +31,7 @@ import {
   prepareNimiqHub,
   readPendingHubAuthentication,
   readSelectedHubAddress,
+  releaseHubReturnRestore,
   takeHubRedirectResult,
   type AuthStage,
   type MiniAppWallet,
@@ -90,6 +92,7 @@ export function NimiqConnect({
 
   useEffect(() => {
     prepareNimiqHub();
+    const ownsHubReturn = claimHubReturnRestore();
     let active = true;
 
     async function restore() {
@@ -99,6 +102,18 @@ export function NimiqConnect({
         if (restored) {
           setSession(restored);
           setStage("authenticated");
+          return;
+        }
+
+        if (!ownsHubReturn) {
+          const pending = readPendingHubAuthentication();
+          if (pending) {
+            setPendingHub(pending);
+            setStage("awaiting-signature");
+            setIsOpen(hasHubUiIntent());
+            return;
+          }
+          setStage("idle");
           return;
         }
 
@@ -175,7 +190,19 @@ export function NimiqConnect({
     void restore();
     return () => {
       active = false;
+      if (ownsHubReturn) releaseHubReturnRestore();
     };
+  }, []);
+
+  useEffect(() => {
+    function onPageShow() {
+      setStage((current) => {
+        if (current !== "requesting-wallet" && current !== "requesting-signature") return current;
+        return readPendingHubAuthentication() ? "awaiting-signature" : "idle";
+      });
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
   }, []);
 
   useEffect(() => {

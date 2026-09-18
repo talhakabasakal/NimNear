@@ -48,7 +48,9 @@ import {
   finishHubSignature,
   hasHubUiIntent,
   hubRedirectBehavior,
+  hubAuthFailureDiagnostics,
   NIMIQ_HUB_PUBLIC_METHODS,
+  nimiqHubReturnUrl,
   persistPendingHubAuthentication,
   persistSelectedHubAddress,
   readPendingHubAuthentication,
@@ -478,6 +480,163 @@ test("Hub redirect invocation encodes choose-address on the Mainnet Hub URL", as
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;
     globalThis.history = previousHistory;
+  }
+});
+
+test("Hub return URLs follow the Events root and related routes without secrets", () => {
+  const previous = globalThis.window;
+  const origin = "https://nim-near.vercel.app";
+  try {
+    for (const [pathname, search] of [
+      ["/", "?view=upcoming"],
+      ["/events", ""],
+      ["/events/abc", ""],
+      ["/wallet", ""],
+    ] as const) {
+      globalThis.window = { location: { origin, pathname, search } } as never;
+      const url = nimiqHubReturnUrl();
+      const parsed = new URL(url);
+      assert.equal(parsed.origin, origin);
+      assert.equal(parsed.pathname, pathname);
+      assert.equal(parsed.search, search);
+      assert.equal(url.includes("token="), false);
+      assert.equal(url.includes("jwt="), false);
+    }
+  } finally {
+    globalThis.window = previous;
+  }
+});
+
+test("Hub choose-address callback is recovered from the Events root", async () => {
+  resetHubRedirectConsumption();
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousHistory = globalThis.history;
+  const storage = memoryStorage();
+  storage.setItem("rpcRequests", JSON.stringify({ "42": ["choose-address", { phase: "choose-address" }] }));
+  const result = encodeURIComponent(JSON.stringify({ address, label: "Events Address" }));
+  let href = `https://nim-near.vercel.app/#id=42&status=ok&result=${result}`;
+  const location = {
+    origin: "https://nim-near.vercel.app",
+    pathname: "/",
+    search: "",
+    protocol: "https:",
+    hostname: "nim-near.vercel.app",
+    get hash() { return new URL(href).hash; },
+    get href() { return href; },
+    set href(value: string) { href = value; },
+  };
+  globalThis.document = { referrer: "" } as never;
+  globalThis.history = {
+    state: null,
+    replaceState(_state: unknown, _title: string, url: string) {
+      href = new URL(url, "https://nim-near.vercel.app").href;
+    },
+  } as never;
+  globalThis.window = { location, sessionStorage: storage, history: globalThis.history } as never;
+  try {
+    const redirected = await takeHubRedirectResult({
+      on() { throw new Error("HubApi handlers are not required when the hash already contains the result"); },
+      async checkRedirectResponse() { throw new Error("HubApi must not depend on document.referrer for HTTP returns"); },
+    } as never);
+    assert.equal(redirected.type, "address");
+    if (redirected.type === "address") {
+      assert.equal(redirected.address, address);
+      assert.equal(redirected.label, "Events Address");
+    }
+    assert.equal(storage.getItem("nimnear.auth.hub.selectedAddress"), address);
+  } finally {
+    resetHubRedirectConsumption();
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+    globalThis.history = previousHistory;
+  }
+});
+
+test("Hub initiation from the Events root encodes Mainnet choose-address and returns to /", async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousHistory = globalThis.history;
+  let href = "https://nim-near.vercel.app/?view=upcoming";
+  globalThis.document = { referrer: "" } as never;
+  globalThis.history = { state: { __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: { circular: null } }, replaceState() { throw new Error("DataCloneError"); } } as never;
+  globalThis.window = {
+    location: {
+      origin: "https://nim-near.vercel.app",
+      pathname: "/",
+      search: "?view=upcoming",
+      hash: "",
+      protocol: "https:",
+      hostname: "nim-near.vercel.app",
+    },
+    sessionStorage: memoryStorage(),
+    history: globalThis.history,
+    addEventListener() {},
+    removeEventListener() {},
+  } as never;
+  Object.defineProperty(globalThis.window.location, "href", {
+    get() { return href; },
+    set(value: string) { href = value; },
+    configurable: true,
+  });
+  const previousNetwork = process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+  process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = "main-albatross";
+  try {
+    const config = resolveNimiqAuthConfig({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "main-albatross" });
+    assert.equal(config.ok, true);
+    if (!config.ok) return;
+    const hub = new HubApi(config.hubEndpoint);
+    const navigation = hub.chooseAddress({ appName: "NIMNear" }, hubRedirectBehavior({ phase: "choose-address" }) as never);
+    await Promise.race([navigation, new Promise((resolve) => setTimeout(resolve, 50))]);
+    const redirected = new URL(href);
+    assert.equal(redirected.origin, NIMIQ_HUB_MAINNET);
+    assert.equal(redirected.hash.includes("command=choose-address"), true);
+    assert.match(decodeURIComponent(redirected.hash), /returnURL=https:\/\/nim-near\.vercel\.app\/\?view=upcoming/);
+    assert.equal(href.startsWith("https://hub.nimiq-testnet.com"), false);
+  } finally {
+    if (previousNetwork == null) delete process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+    else process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = previousNetwork;
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+    globalThis.history = previousHistory;
+  }
+});
+
+test("Hub back-navigation is cancelled instead of reported as unreachable", async () => {
+  await assert.rejects(
+    () => beginHubAuthentication({ chooseAddress: async () => { throw new Error("Request aborted"); } } as never, async () => challenge),
+    (error) => error instanceof NimiqAuthError && error.cancelled && error.code === "wallet_cancelled" && error.cause instanceof Error,
+  );
+});
+
+test("unknown Hub failures keep a safe UI message and structured diagnostics", async () => {
+  const previous = globalThis.window;
+  globalThis.window = {
+    location: { origin: "https://nim-near.vercel.app", pathname: "/", search: "", href: "https://nim-near.vercel.app/", hash: "" },
+    sessionStorage: memoryStorage(),
+  } as never;
+  try {
+    const original = new Error("ECONNREFUSED hub.nimiq.com");
+    await assert.rejects(
+      () => beginHubAuthentication({ chooseAddress: async () => { throw original; } } as never, async () => challenge),
+      (error) => {
+        if (!(error instanceof NimiqAuthError)) return false;
+        assert.equal(error.code, "wallet_unavailable");
+        assert.equal(error.message, "The Nimiq wallet could not be reached.");
+        assert.equal(error.cause, original);
+        const diagnostics = hubAuthFailureDiagnostics(error.stage, original, "requesting-wallet");
+        assert.equal(diagnostics.errorName, "Error");
+        assert.equal(diagnostics.errorMessage, "ECONNREFUSED hub.nimiq.com");
+        assert.equal(diagnostics.requestPhase, "requesting-wallet");
+        assert.equal(diagnostics.hubEndpoint, "https://hub.nimiq-testnet.com");
+        assert.equal(diagnostics.pathname, "/");
+        assert.equal(diagnostics.returnUrl, "https://nim-near.vercel.app/");
+        assert.equal(diagnostics.returnUrl.includes("token="), false);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.window = previous;
   }
 });
 

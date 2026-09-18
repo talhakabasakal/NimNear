@@ -52,8 +52,14 @@ test("the wallet page remains in the app while Discover redirects to Events", ()
     new URL("../../next.config.ts", import.meta.url),
     "utf8",
   );
+  const header = fs.readFileSync(
+    new URL("../../components/app/app-header.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(walletPage, /WalletScreen/);
   assert.match(nextConfig, /source: "\/discover"/);
   assert.match(nextConfig, /destination: "\/"/);
+  assert.match(header, /NimiqConnect/);
+  assert.match(header, /restoreOnly/);
 });
