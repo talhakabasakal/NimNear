@@ -3,10 +3,13 @@ import test from "node:test";
 
 import { AuthApiError, createNimiqChallenge } from "../../lib/api/auth";
 import {
+  isAllowedNimiqAuthNetwork,
   isNimiqHubEnabled,
   NIMIQ_HUB_MAINNET,
   NIMIQ_HUB_TESTNET,
+  nimiqNetworkLabel,
   parseNimiqAuthNetwork,
+  requireNimiqAuthConfig,
   resolveNimiqAuthConfig,
 } from "../../lib/auth/nimiq-network";
 
@@ -22,6 +25,9 @@ test("configured testnet maps to testnet challenge network and Hub", () => {
   assert.equal(config.networkId, 5);
   assert.equal(config.hubEndpoint, NIMIQ_HUB_TESTNET);
   assert.equal(config.hubEndpoint, "https://hub.nimiq-testnet.com");
+  assert.equal(config.hubLabel, "Nimiq Testnet Hub");
+  assert.equal(config.displayName, "Nimiq Testnet");
+  assert.equal(nimiqNetworkLabel({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "test-albatross" }), "Nimiq Testnet");
 });
 
 test("configured mainnet maps to mainnet challenge network and Hub", () => {
@@ -35,6 +41,9 @@ test("configured mainnet maps to mainnet challenge network and Hub", () => {
   assert.equal(config.hubEndpoint, NIMIQ_HUB_MAINNET);
   assert.equal(config.hubEndpoint, "https://hub.nimiq.com");
   assert.equal(config.hubEndpoint.includes("hub.nimiq-testnet.com"), false);
+  assert.equal(config.hubLabel, "Nimiq Hub");
+  assert.equal(config.displayName, "Nimiq Mainnet");
+  assert.equal(nimiqNetworkLabel({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "main-albatross" }), "Nimiq Mainnet");
 });
 
 test("unknown network fails safely", () => {
@@ -43,10 +52,29 @@ test("unknown network fails safely", () => {
   if (config.ok) return;
   assert.equal(config.code, "nimiq_network_unconfigured");
   assert.equal(parseNimiqAuthNetwork("polygon"), null);
+  assert.equal(isAllowedNimiqAuthNetwork("ethereum"), false);
+  assert.equal(isAllowedNimiqAuthNetwork("main-albatross"), true);
+  assert.equal(isAllowedNimiqAuthNetwork("test-albatross"), true);
+  assert.equal(nimiqNetworkLabel({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "ethereum" }), "");
+  assert.throws(
+    () => requireNimiqAuthConfig({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "ethereum" }),
+    (error: unknown) => error instanceof Error && error.message.includes("test-albatross or main-albatross"),
+  );
 });
 
 test("production builds do not default to TestAlbatross when unset", () => {
   const config = resolveNimiqAuthConfig({ NODE_ENV: "production" });
+  assert.equal(config.ok, false);
+  if (config.ok) return;
+  assert.equal(config.code, "nimiq_network_unconfigured");
+  assert.equal(nimiqNetworkLabel({ NODE_ENV: "production" }), "");
+});
+
+test("production invalid configuration does not fall back to Testnet", () => {
+  const config = resolveNimiqAuthConfig({
+    NODE_ENV: "production",
+    NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "not-a-network",
+  });
   assert.equal(config.ok, false);
   if (config.ok) return;
   assert.equal(config.code, "nimiq_network_unconfigured");
@@ -57,7 +85,9 @@ test("development defaults remain TestAlbatross", () => {
   assert.equal(config.ok, true);
   if (!config.ok) return;
   assert.equal(config.network, "test-albatross");
+  assert.equal(config.environment, "testnet");
   assert.equal(config.hubEndpoint, NIMIQ_HUB_TESTNET);
+  assert.equal(config.displayName, "Nimiq Testnet");
 });
 
 test("createNimiqChallenge sends the configured testnet", async () => {
@@ -96,15 +126,46 @@ test("createNimiqChallenge fails closed on unknown network without calling Hub",
   });
 });
 
-async function withPublicNetwork(value: string, run: () => Promise<void>) {
+test("createNimiqChallenge fails closed in production when the network is unset", async () => {
+  await withPublicNetwork(undefined, async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    setNodeEnv("production");
+    let fetched = false;
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetched = true;
+      return new Response("{}", { status: 500 });
+    }) as typeof fetch;
+    try {
+      const config = resolveNimiqAuthConfig();
+      assert.equal(config.ok, false);
+      await assert.rejects(
+        () => createNimiqChallenge(address, "hub"),
+        (error: unknown) => error instanceof AuthApiError && error.code === "nimiq_network_unconfigured" && !fetched,
+      );
+    } finally {
+      globalThis.fetch = previousFetch;
+      setNodeEnv(previousNodeEnv);
+    }
+  });
+});
+
+async function withPublicNetwork(value: string | undefined, run: () => Promise<void>) {
   const previous = process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
-  process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = value;
+  if (value == null) delete process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
+  else process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = value;
   try {
     await run();
   } finally {
     if (previous == null) delete process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK;
     else process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK = previous;
   }
+}
+
+function setNodeEnv(value: string | undefined) {
+  const env = process.env as Record<string, string | undefined>;
+  if (value == null) delete env.NODE_ENV;
+  else env.NODE_ENV = value;
 }
 
 async function captureChallengeBody() {
@@ -137,4 +198,3 @@ test("Hub fallback can be disabled for Mini App-only production", () => {
   assert.equal(isNimiqHubEnabled({ NEXT_PUBLIC_NIMNEAR_HUB_ENABLED: "false" }), false);
   assert.equal(isNimiqHubEnabled({ NEXT_PUBLIC_NIMNEAR_HUB_ENABLED: "true" }), true);
 });
-

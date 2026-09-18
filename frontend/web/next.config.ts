@@ -1,16 +1,16 @@
 import { networkInterfaces } from "node:os";
 import type { NextConfig } from "next";
 
-import { isAllowedNimiqAuthNetwork } from "./lib/auth/nimiq-network";
+import { resolveNimiqAuthConfig } from "./lib/auth/nimiq-network";
 
 const detectedLanHosts = Object.values(networkInterfaces())
   .flatMap((entries) => entries ?? [])
   .filter((entry) => entry.family === "IPv4" && !entry.internal)
   .map((entry) => entry.address);
 const configuredLanHost = process.env.NIMNEAR_DEV_LAN_IP?.trim();
-const configuredNimiqNetwork = process.env.NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK?.trim();
-if (configuredNimiqNetwork && !isAllowedNimiqAuthNetwork(configuredNimiqNetwork)) {
-  throw new Error("NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK must be test-albatross or main-albatross");
+const configuredNimiqNetwork = resolveNimiqAuthConfig();
+if (!configuredNimiqNetwork.ok) {
+  throw new Error(configuredNimiqNetwork.message);
 }
 
 const hubEnabled = process.env.NEXT_PUBLIC_NIMNEAR_HUB_ENABLED?.trim().toLowerCase() !== "false";

@@ -3,13 +3,15 @@ import test from "node:test";
 
 import {
   bytesToHex,
-  NIMIQ_AUTH_ENVIRONMENT,
-  NIMIQ_AUTH_NETWORK,
-  NIMIQ_HUB_ENDPOINT,
   NimiqAuthError,
   normalizeHex,
   selectNimiqAuthTransport,
 } from "../../lib/auth/nimiq";
+import {
+  NIMIQ_HUB_MAINNET,
+  NIMIQ_HUB_TESTNET,
+  resolveNimiqAuthConfig,
+} from "../../lib/auth/nimiq-network";
 
 test("Mini App host signals select the Mini App adapter", () => {
   assert.equal(selectNimiqAuthTransport({ hasNimiqPay: true, hasNimiqProvider: false }), "mini-app");
@@ -19,9 +21,13 @@ test("Mini App host signals select the Mini App adapter", () => {
 
 test("development Hub defaults to Testnet and does not use mainnet constants", () => {
   assert.equal(selectNimiqAuthTransport({ hasNimiqPay: false, hasNimiqProvider: false }), "hub");
-  assert.equal(NIMIQ_HUB_ENDPOINT, "https://hub.nimiq-testnet.com");
-  assert.equal(NIMIQ_AUTH_NETWORK, "test-albatross");
-  assert.equal(NIMIQ_AUTH_ENVIRONMENT, "testnet");
+  const config = resolveNimiqAuthConfig({ NODE_ENV: "development" });
+  assert.equal(config.ok, true);
+  if (!config.ok) return;
+  assert.equal(config.hubEndpoint, "https://hub.nimiq-testnet.com");
+  assert.equal(config.network, "test-albatross");
+  assert.equal(config.environment, "testnet");
+  assert.equal(config.hubEndpoint.includes("https://hub.nimiq.com"), false);
 });
 
 test("Hub bytes and Mini App hex normalize at one boundary", () => {
@@ -167,8 +173,11 @@ function memoryStorage() {
 }
 
 test("development Hub defaults never fall back to mainnet and uses public methods only", () => {
-  assert.equal(NIMIQ_HUB_ENDPOINT.includes("https://hub.nimiq.com"), false);
-  assert.equal(NIMIQ_HUB_ENDPOINT, "https://hub.nimiq-testnet.com");
+  const config = resolveNimiqAuthConfig({ NODE_ENV: "development" });
+  assert.equal(config.ok, true);
+  if (!config.ok) return;
+  assert.equal(config.hubEndpoint.includes("https://hub.nimiq.com"), false);
+  assert.equal(config.hubEndpoint, NIMIQ_HUB_TESTNET);
   assert.deepEqual([...NIMIQ_HUB_PUBLIC_METHODS], ["chooseAddress", "signMessage"]);
 });
 
@@ -371,7 +380,10 @@ test("Hub redirect invocation encodes choose-address on the Testnet Hub URL", as
     configurable: true,
   });
   try {
-    const hub = new HubApi(NIMIQ_HUB_ENDPOINT);
+    const config = resolveNimiqAuthConfig({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "test-albatross" });
+    assert.equal(config.ok, true);
+    if (!config.ok) return;
+    const hub = new HubApi(config.hubEndpoint);
     const navigation = hub.chooseAddress(
       { appName: "NIMNear" },
       new HubApi.RedirectRequestBehavior("http://localhost:3000/profile", { phase: "choose-address" }) as never,
@@ -382,6 +394,55 @@ test("Hub redirect invocation encodes choose-address on the Testnet Hub URL", as
     assert.equal(redirected.hash.includes("command=choose-address"), true);
     assert.match(decodeURIComponent(redirected.hash), /NIMNear/);
     assert.equal(href.startsWith("https://hub.nimiq.com"), false);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+    globalThis.history = previousHistory;
+  }
+});
+
+test("Hub redirect invocation encodes choose-address on the Mainnet Hub URL", async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousHistory = globalThis.history;
+  let href = "http://localhost:3000/profile";
+  globalThis.document = { referrer: "" } as never;
+  globalThis.history = { state: null, replaceState() {} } as never;
+  globalThis.window = {
+    location: {
+      origin: "http://localhost:3000",
+      pathname: "/profile",
+      search: "",
+      hash: "",
+      protocol: "http:",
+      hostname: "localhost",
+    },
+    sessionStorage: memoryStorage(),
+    history: globalThis.history,
+    addEventListener() {},
+    removeEventListener() {},
+  } as never;
+  Object.defineProperty(globalThis.window.location, "href", {
+    get() { return href; },
+    set(value: string) { href = value; },
+    configurable: true,
+  });
+  try {
+    const config = resolveNimiqAuthConfig({ NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "main-albatross" });
+    assert.equal(config.ok, true);
+    if (!config.ok) return;
+    assert.equal(config.hubEndpoint, NIMIQ_HUB_MAINNET);
+    const hub = new HubApi(config.hubEndpoint);
+    const navigation = hub.chooseAddress(
+      { appName: "NIMNear" },
+      new HubApi.RedirectRequestBehavior("http://localhost:3000/profile", { phase: "choose-address" }) as never,
+    );
+    await Promise.race([navigation, new Promise((resolve) => setTimeout(resolve, 50))]);
+    const redirected = new URL(href);
+    assert.equal(redirected.origin, "https://hub.nimiq.com");
+    assert.equal(redirected.hash.includes("command=choose-address"), true);
+    assert.match(decodeURIComponent(redirected.hash), /NIMNear/);
+    assert.equal(href.startsWith("https://hub.nimiq-testnet.com"), false);
   } finally {
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;

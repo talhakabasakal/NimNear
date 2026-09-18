@@ -18,6 +18,7 @@ import {
   updateProfile,
   type ProfileRecord,
 } from "@/lib/api/profiles";
+import { nimiqNetworkLabel } from "@/lib/auth/nimiq-network";
 import {
   compactNimiqAddress,
   identiconSeeds,
@@ -101,6 +102,7 @@ export function AccountProfile({
 
   const previewSeed = faces[selectedFace] ?? compactAddress;
   const name = displayName.trim() || profileName(profile);
+  const networkLabel = nimiqNetworkLabel();
 
   async function copyAddress() {
     if (!compactAddress) return;
@@ -194,7 +196,13 @@ export function AccountProfile({
             </p>
             <p className="mt-0.5 text-sm text-muted">
               {compactAddress
-                ? "Logged in with your wallet · Nimiq Testnet · Joined " + joinedLabel(profile.joined_at)
+                ? [
+                    "Logged in with your wallet",
+                    networkLabel,
+                    "Joined " + joinedLabel(profile.joined_at),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
                 : "Joined " + joinedLabel(profile.joined_at)}
             </p>
           </div>

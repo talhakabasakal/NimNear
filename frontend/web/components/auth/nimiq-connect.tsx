@@ -34,7 +34,7 @@ import {
   type MiniAppWallet,
   type PendingHubAuthentication,
 } from "@/lib/auth/nimiq";
-import { isNimiqHubEnabled, resolveNimiqAuthConfig } from "@/lib/auth/nimiq-network";
+import { isNimiqHubEnabled, nimiqNetworkLabel, resolveNimiqAuthConfig } from "@/lib/auth/nimiq-network";
 import { getHostLanguage } from "@nimiq/mini-app-sdk";
 
 type NimiqConnectProps = {
@@ -468,7 +468,7 @@ export function NimiqConnect({
             >
               {stage !== "idle" && !pendingHub
                 ? stageLabel[stage]
-                : "Nimiq Testnet"}
+                : nimiqNetworkLabel()}
             </p>
             {error ? (
               <p

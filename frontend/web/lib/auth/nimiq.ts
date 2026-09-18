@@ -17,10 +17,9 @@ import {
 import { isNimiqHubEnabled, resolveNimiqAuthConfig } from "@/lib/auth/nimiq-network";
 
 export {
-  NIMIQ_AUTH_ENVIRONMENT,
-  NIMIQ_AUTH_NETWORK,
-  NIMIQ_HUB_ENDPOINT,
   isNimiqHubEnabled,
+  requireNimiqAuthConfig,
+  resolveNimiqAuthConfig,
 } from "@/lib/auth/nimiq-network";
 export const NIMIQ_HUB_PUBLIC_METHODS = ["chooseAddress", "signMessage"] as const;
 const APP_NAME = "NIMNear";
