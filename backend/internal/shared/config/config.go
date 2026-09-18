@@ -164,6 +164,9 @@ func validateProductionRedis(cfg RedisConfig) error {
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("REDIS_PORT must be a valid TCP port in production")
 	}
+	if !cfg.TLS {
+		return fmt.Errorf("REDIS_TLS must be true in production")
+	}
 	return nil
 }
 
@@ -381,6 +384,7 @@ type RedisConfig struct {
 	Port     int
 	Password string
 	DB       int
+	TLS      bool
 }
 
 // Addr returns the Redis address string.
@@ -576,6 +580,7 @@ func Load() *Config {
 			Port:     envOrDefaultInt("REDIS_PORT", 6379),
 			Password: envOrDefault("REDIS_PASSWORD", ""),
 			DB:       envOrDefaultInt("REDIS_DB", 0),
+			TLS:      envOrDefault("REDIS_TLS", "false") == "true",
 		},
 		JWT: JWTConfig{
 			Secret:          envOrDefault("JWT_SECRET", defaultJWTSecret),

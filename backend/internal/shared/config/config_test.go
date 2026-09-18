@@ -14,6 +14,7 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("NIMNEAR_EMAIL_AUTH_ENABLED", "")
 	t.Setenv("NIMNEAR_PLATFORM_API_ENABLED", "")
 	t.Setenv("NIMNEAR_METRICS_PUBLIC", "")
+	t.Setenv("REDIS_TLS", "")
 	cfg := Load()
 
 	assert.Equal(t, EnvironmentDevelopment, cfg.Environment)
@@ -25,6 +26,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "nimnear", cfg.Database.User)
 	assert.Equal(t, "localhost", cfg.Redis.Host)
 	assert.Equal(t, 6379, cfg.Redis.Port)
+	assert.False(t, cfg.Redis.TLS)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Equal(t, 30*time.Second, cfg.Payments.ReconciliationInterval)
@@ -130,6 +132,24 @@ func TestRedisConfig_Addr(t *testing.T) {
 	assert.Equal(t, "redis.local:6380", cfg.Addr())
 }
 
+func TestLoad_RedisTLSTrue(t *testing.T) {
+	t.Setenv("REDIS_TLS", "true")
+	cfg := Load()
+	assert.True(t, cfg.Redis.TLS)
+}
+
+func TestLoad_RedisTLSDefaultsFalse(t *testing.T) {
+	t.Setenv("REDIS_TLS", "")
+	cfg := Load()
+	assert.False(t, cfg.Redis.TLS)
+}
+
+func TestLoad_RedisTLSExplicitFalse(t *testing.T) {
+	t.Setenv("REDIS_TLS", "false")
+	cfg := Load()
+	assert.False(t, cfg.Redis.TLS)
+}
+
 func validProductionConfig() Config {
 	return Config{
 		Environment: EnvironmentProduction,
@@ -145,7 +165,7 @@ func validProductionConfig() Config {
 			DBName:   "nimnear_production",
 			SSLMode:  "require",
 		},
-		Redis: RedisConfig{Host: "redis.internal", Port: 6379},
+		Redis: RedisConfig{Host: "redis.internal", Port: 6379, TLS: true},
 		JWT: JWTConfig{
 			Secret:          strings.Repeat("j", 32),
 			ExpirationHours: 24,
@@ -407,6 +427,29 @@ func TestConfigValidate_ProductionRejectsPublicMetricsEmailAndPlatform(t *testin
 	err = cfg.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "NIMNEAR_PLATFORM_API_ENABLED")
+}
+
+func TestConfigValidate_ProductionRejectsRedisWithoutTLS(t *testing.T) {
+	cfg := validProductionConfig()
+	cfg.Redis.TLS = false
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "REDIS_TLS")
+}
+
+func TestConfigValidate_ProductionAcceptsRedisTLS(t *testing.T) {
+	cfg := validProductionConfig()
+	assert.True(t, cfg.Redis.TLS)
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestConfigValidate_DevelopmentAllowsRedisWithoutTLS(t *testing.T) {
+	t.Setenv("APP_ENV", EnvironmentDevelopment)
+	t.Setenv("REDIS_TLS", "false")
+	cfg := Load()
+	assert.False(t, cfg.Redis.TLS)
+	assert.NoError(t, cfg.Validate())
 }
 
 func TestConfigValidate_ProductionRequiresRedisAndCanonicalOrigin(t *testing.T) {
