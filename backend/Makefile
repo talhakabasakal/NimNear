@@ -1,4 +1,4 @@
-.PHONY: build run test test-postgres lint migrate migrate-test migrate-down docker-up docker-down clean help seed seed-dev-places
+.PHONY: build run test test-postgres lint migrate migrate-test migrate-down docker-up docker-down clean help seed seed-dev-places seed-production-events
 
 APP_NAME := nimnear-api
 BUILD_DIR := bin
@@ -102,3 +102,8 @@ seed:
 seed-dev-places:
 	@echo "Seeding fictional development places..."
 	go run ./cmd/seed-dev-places
+
+## seed-production-events: Idempotent production demo events via EventUseCase.Create
+seed-production-events:
+	@echo "Seeding production demo events..."
+	go run ./cmd/seed-production-events $(ARGS)

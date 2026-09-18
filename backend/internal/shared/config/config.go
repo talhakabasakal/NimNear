@@ -148,6 +148,20 @@ func validateProductionDatabase(cfg DatabaseConfig) error {
 	return nil
 }
 
+// ValidateForEnvironment validates only the PostgreSQL settings needed by a
+// database-only command. The server uses Config.Validate, which additionally
+// validates the rest of the application configuration.
+func (d DatabaseConfig) ValidateForEnvironment(environment string) error {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case EnvironmentDevelopment, EnvironmentTest:
+		return nil
+	case EnvironmentProduction:
+		return validateProductionDatabase(d)
+	default:
+		return fmt.Errorf("APP_ENV must be one of development, test, or production")
+	}
+}
+
 func containsWildcardOrigin(origins []string) bool {
 	for _, origin := range origins {
 		if strings.TrimSpace(origin) == "*" {
@@ -544,10 +558,27 @@ type LogConfig struct {
 	Format string // json, text
 }
 
+// LoadDatabaseConfig reads only the environment and PostgreSQL settings
+// needed by database-only commands. It deliberately does not read or
+// validate unrelated server settings such as JWT, CORS, Redis, or Nimiq auth.
+func LoadDatabaseConfig() (string, DatabaseConfig) {
+	environment := envOrDefault("APP_ENV", EnvironmentDevelopment)
+	return environment, DatabaseConfig{
+		Host:     envOrDefault("DB_HOST", defaultDBHost),
+		Port:     envOrDefaultInt("DB_PORT", 5432),
+		User:     envOrDefault("DB_USER", defaultDBUser),
+		Password: envOrDefault("DB_PASSWORD", defaultDBPassword),
+		DBName:   envOrDefault("DB_NAME", defaultDBName),
+		SSLMode:  envOrDefault("DB_SSLMODE", defaultDBSSLMode),
+		MaxConns: envOrDefaultInt32("DB_MAX_CONNS", 25),
+		MinConns: envOrDefaultInt32("DB_MIN_CONNS", 5),
+	}
+}
+
 // Load reads configuration from environment variables with development-safe
 // defaults. Production must call Validate and cannot use these defaults.
 func Load() *Config {
-	environment := envOrDefault("APP_ENV", EnvironmentDevelopment)
+	environment, database := LoadDatabaseConfig()
 	emailAuthDefault := "true"
 	platformAPIDefault := "true"
 	metricsPublicDefault := "true"
@@ -569,16 +600,7 @@ func Load() *Config {
 			MaxBodyBytes:       envOrDefaultInt64("MAX_BODY_BYTES", 1<<20),
 			TrustedProxyCIDRs:  envOrDefaultSlice("NIMNEAR_TRUSTED_PROXY_CIDRS", nil),
 		},
-		Database: DatabaseConfig{
-			Host:     envOrDefault("DB_HOST", "localhost"),
-			Port:     envOrDefaultInt("DB_PORT", 5432),
-			User:     envOrDefault("DB_USER", defaultDBUser),
-			Password: envOrDefault("DB_PASSWORD", defaultDBPassword),
-			DBName:   envOrDefault("DB_NAME", defaultDBName),
-			SSLMode:  envOrDefault("DB_SSLMODE", "disable"),
-			MaxConns: envOrDefaultInt32("DB_MAX_CONNS", 25),
-			MinConns: envOrDefaultInt32("DB_MIN_CONNS", 5),
-		},
+		Database: database,
 		Redis: RedisConfig{
 			Host:     envOrDefault("REDIS_HOST", "localhost"),
 			Port:     envOrDefaultInt("REDIS_PORT", 6379),

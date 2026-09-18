@@ -77,6 +77,33 @@ func TestLoad_ExplicitLegacySurfaceOverrides(t *testing.T) {
 	assert.Equal(t, []string{"orders", "catalog_items"}, cfg.Platform.GatewayTableAllowlist)
 }
 
+func TestLoadDatabaseConfig_ProductionDoesNotRequireApplicationSecrets(t *testing.T) {
+	t.Setenv("APP_ENV", EnvironmentProduction)
+	t.Setenv("DB_HOST", "postgres.example.com")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "nimnear_app")
+	t.Setenv("DB_PASSWORD", "production-db-password")
+	t.Setenv("DB_NAME", "nimnear_production")
+	t.Setenv("DB_SSLMODE", "require")
+	t.Setenv("JWT_SECRET", "")
+	t.Setenv("JWT_ISSUER", "")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "")
+	t.Setenv("REDIS_HOST", "")
+	t.Setenv("NIMNEAR_AUTH_NETWORK", "")
+
+	environment, database := LoadDatabaseConfig()
+	assert.Equal(t, EnvironmentProduction, environment)
+	assert.NoError(t, database.ValidateForEnvironment(environment))
+}
+
+func TestDatabaseConfigValidateForEnvironment_ProductionRequiresTLS(t *testing.T) {
+	database := validProductionConfig().Database
+	database.SSLMode = defaultDBSSLMode
+
+	err := database.ValidateForEnvironment(EnvironmentProduction)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DB_SSLMODE")
+}
 func TestLoad_EnvironmentOverrides(t *testing.T) {
 	os.Setenv("SERVER_PORT", "9090")
 	os.Setenv("DB_HOST", "db.example.com")
