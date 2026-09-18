@@ -21,6 +21,7 @@ import {
   type AuthSession,
 } from "@/lib/api/auth";
 import { detectNimiqAuthTransport } from "@/lib/auth/nimiq";
+import { paymentNetworkMatchesDeployment } from "@/lib/auth/nimiq-network";
 import {
   canInvokePaymentSend,
   consumePaymentRequestResume,
@@ -235,6 +236,10 @@ export function PayRequestScreen({ publicId }: { publicId: string }) {
 
   async function confirmPay() {
     if (!request || !locked || busy) return;
+    if (!paymentNetworkMatchesDeployment(request.network)) {
+      setNotice("Payment network does not match this Nimiq deployment.");
+      return;
+    }
     if (miniAppAvailable === false) {
       setNotice("Open this payment request in Nimiq Pay to complete the payment.");
       return;

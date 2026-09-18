@@ -24,6 +24,7 @@ import {
 } from "@/lib/api/purchases";
 import { subscribeRealtime } from "@/lib/realtime/client";
 import { createCoalescer, eventTouchesResource, isEventPurchaseEvent } from "@/lib/realtime/events";
+import { paymentNetworkMatchesDeployment } from "@/lib/auth/nimiq-network";
 import {
   initializeMiniAppProvider,
   NimiqTransactionError,
@@ -275,6 +276,9 @@ export function EventPurchase({ eventId, isPast, isSoldOut }: EventPurchaseProps
       }
 
       const instructions = await fetchPaymentInstructions(current.id);
+      if (!paymentNetworkMatchesDeployment(instructions.network)) {
+        throw new Error("Payment network does not match this Nimiq deployment.");
+      }
       const amount = parseSafeLuna(instructions.amount_lunas);
       const provider = await initializeMiniAppProvider();
 

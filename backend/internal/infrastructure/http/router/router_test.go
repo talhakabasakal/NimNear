@@ -90,6 +90,7 @@ func TestNewRoutePatterns(t *testing.T) {
 	want := []string{
 		"GET /health/live",
 		"GET /health/ready",
+		"GET /health/payments",
 		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/login",
 		"POST /api/v1/auth/token",
@@ -197,6 +198,7 @@ func TestPlatformDisabledKeepsProductRoutesAndHidesGateway(t *testing.T) {
 		"GET /api/v1/wallet/balance",
 		"GET /api/v1/ws",
 		"GET /health/live",
+		"GET /health/payments",
 	} {
 		if !registered[want] {
 			t.Errorf("product route %q missing when platform is disabled", want)

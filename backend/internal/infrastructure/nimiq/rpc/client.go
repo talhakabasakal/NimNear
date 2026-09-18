@@ -315,7 +315,7 @@ func (v *NimiqVerifier) VerifyTransfer(ctx context.Context, transfer verificatio
 	if err != nil {
 		return verification.OutcomeNotFound, err
 	}
-	if block.Network != v.network || !strings.EqualFold(block.Type, "micro") || block.Batch == 0 {
+	if !nimiqnet.SameEnvironment(block.Network, v.network) || !strings.EqualFold(block.Type, "micro") || block.Batch == 0 {
 		return verification.OutcomeInvalid, nil
 	}
 

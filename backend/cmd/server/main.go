@@ -238,17 +238,21 @@ func buildDependencies(
 	eventBus events.EventBus,
 ) router.Dependencies {
 	deps := router.Dependencies{
-		Logger:             log,
-		DB:                 db,
-		Redis:              redisClient,
-		CORSAllowedOrigins: cfg.Server.CORSAllowedOrigins,
-		MaxBodyBytes:       cfg.Server.MaxBodyBytes,
-		SessionCookieName:  cfg.NimiqAuth.CookieName,
-		PaymentsEnabled:    cfg.Payments.Enabled(),
-		EmailAuthEnabled:   cfg.EmailAuth.Enabled,
-		PlatformAPIEnabled: cfg.Platform.APIEnabled,
-		MetricsEnabled:     cfg.Metrics.Enabled,
-		MetricsPublic:      cfg.Metrics.Public,
+		Logger:                    log,
+		DB:                        db,
+		Redis:                     redisClient,
+		CORSAllowedOrigins:        cfg.Server.CORSAllowedOrigins,
+		MaxBodyBytes:              cfg.Server.MaxBodyBytes,
+		SessionCookieName:         cfg.NimiqAuth.CookieName,
+		PaymentsEnabled:           cfg.Payments.Enabled(),
+		PaymentNetwork:            cfg.Payments.NimiqNetwork,
+		MerchantAddressConfigured: strings.TrimSpace(cfg.Payments.MerchantAddress) != "",
+		RPCConfigured:             strings.TrimSpace(cfg.Payments.NimiqRPCURL) != "",
+		WebSocketEnabled:          cfg.WebSocket.Enabled,
+		EmailAuthEnabled:          cfg.EmailAuth.Enabled,
+		PlatformAPIEnabled:        cfg.Platform.APIEnabled,
+		MetricsEnabled:            cfg.Metrics.Enabled,
+		MetricsPublic:             cfg.Metrics.Public,
 	}
 	if proxies, err := cfg.Server.TrustedProxies(); err == nil {
 		deps.TrustedProxies = proxies

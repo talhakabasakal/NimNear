@@ -94,6 +94,9 @@ func TestNimiqVerifierOutcomes(t *testing.T) {
 		{name: "correct amount is accepted", want: verification.OutcomeConfirmed},
 		{name: "wrong amount is invalid", mutate: func(_ *NimiqVerifier, rpc *fakeRPC, _ *model.Purchase) { rpc.tx.Value = uint64Value(250001) }, want: verification.OutcomeInvalid},
 		{name: "wrong network is invalid", mutate: func(_ *NimiqVerifier, rpc *fakeRPC, _ *model.Purchase) { rpc.block.Network = "TestAlbatross" }, want: verification.OutcomeInvalid},
+		{name: "auth-style MainAlbatross spelling accepts consensus block network", mutate: func(v *NimiqVerifier, _ *fakeRPC, _ *model.Purchase) {
+			v.network = "main-albatross"
+		}, want: verification.OutcomeConfirmed},
 		{name: "wrong network id is invalid", mutate: func(_ *NimiqVerifier, rpc *fakeRPC, _ *model.Purchase) { rpc.tx.NetworkID = uint64Value(5) }, want: verification.OutcomeInvalid},
 		{name: "not found remains submitted", mutate: func(_ *NimiqVerifier, rpc *fakeRPC, _ *model.Purchase) { rpc.txErr = ErrTransactionNotFound }, want: verification.OutcomeNotFound},
 		{name: "non-final micro block is not confirmed", mutate: func(_ *NimiqVerifier, rpc *fakeRPC, _ *model.Purchase) { rpc.batch = 10 }, want: verification.OutcomeNotFinal},

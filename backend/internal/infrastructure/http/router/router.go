@@ -33,8 +33,8 @@ import (
 	"github.com/masterfabric-go/masterfabric/internal/shared/httpx"
 	"github.com/masterfabric-go/masterfabric/internal/shared/middleware"
 
-	tenantRepo "github.com/masterfabric-go/masterfabric/internal/domain/tenant/repository"
 	iamRepo "github.com/masterfabric-go/masterfabric/internal/domain/iam/repository"
+	tenantRepo "github.com/masterfabric-go/masterfabric/internal/domain/tenant/repository"
 )
 
 func maybeRequirePermission(rbac iamService.RBACService, permission string) func(http.Handler) http.Handler {
@@ -50,16 +50,20 @@ type Dependencies struct {
 	DB     *pgxpool.Pool
 	Redis  *redis.Client
 
-	CORSAllowedOrigins []string
-	MaxBodyBytes       int64
-	SessionCookieName  string
-	TrustedProxies     httpx.TrustedProxies
-	PaymentsEnabled    bool
-	EmailAuthEnabled   bool
-	PlatformAPIEnabled bool
-	MetricsEnabled     bool
-	MetricsPublic      bool
-	NimiqRPCHealth     health.RPCChecker
+	CORSAllowedOrigins        []string
+	MaxBodyBytes              int64
+	SessionCookieName         string
+	TrustedProxies            httpx.TrustedProxies
+	PaymentsEnabled           bool
+	PaymentNetwork            string
+	MerchantAddressConfigured bool
+	RPCConfigured             bool
+	WebSocketEnabled          bool
+	EmailAuthEnabled          bool
+	PlatformAPIEnabled        bool
+	MetricsEnabled            bool
+	MetricsPublic             bool
+	NimiqRPCHealth            health.RPCChecker
 
 	// Services
 	AuthService iamService.AuthService
@@ -107,9 +111,12 @@ func New(deps Dependencies) *chi.Mux {
 
 	// Health endpoints. Nimiq RPC is reported when payments are enabled but does
 	// not fail /ready; payment paths fail closed independently.
-	healthHandler := health.NewHandler(deps.DB, deps.Redis).WithNimiqRPC(deps.PaymentsEnabled, deps.NimiqRPCHealth)
+	healthHandler := health.NewHandler(deps.DB, deps.Redis).
+		WithNimiqRPC(deps.PaymentsEnabled, deps.NimiqRPCHealth).
+		WithPaymentStatus(deps.PaymentNetwork, deps.MerchantAddressConfigured, deps.RPCConfigured, deps.WebSocketEnabled)
 	r.Get("/health/live", healthHandler.Liveness)
 	r.Get("/health/ready", healthHandler.Readiness)
+	r.Get("/health/payments", healthHandler.Payments)
 
 	if deps.MetricsEnabled && deps.MetricsPublic {
 		r.Handle("/metrics", promhttp.Handler())

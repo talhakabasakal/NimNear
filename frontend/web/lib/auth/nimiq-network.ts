@@ -97,3 +97,12 @@ export function publicNimiqAuthIdentity(source: NimiqAuthEnvSource = readPublicE
     hub: config.hubEndpoint,
   };
 }
+
+export function paymentNetworkMatchesDeployment(
+  instructionsNetwork: string,
+  source: NimiqAuthEnvSource = readPublicEnv(),
+) {
+  const configured = resolveNimiqAuthConfig(source);
+  const instructed = parseNimiqAuthNetwork(instructionsNetwork);
+  return configured.ok && instructed != null && configured.networkId === instructed.networkId;
+}

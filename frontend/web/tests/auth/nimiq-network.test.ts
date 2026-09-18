@@ -9,6 +9,7 @@ import {
   NIMIQ_HUB_TESTNET,
   nimiqNetworkLabel,
   parseNimiqAuthNetwork,
+  paymentNetworkMatchesDeployment,
   publicNimiqAuthIdentity,
   requireNimiqAuthConfig,
   resolveNimiqAuthConfig,
@@ -244,6 +245,18 @@ test("public identity exposes only non-secret production network metadata", () =
   assert.equal(identity.consensus, "MainAlbatross");
   assert.equal(identity.networkId, 24);
   assert.equal(identity.hub, NIMIQ_HUB_MAINNET);
+});
+
+test("payment instruction networks match the deployed Albatross environment", () => {
+  const main = { NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "main-albatross" };
+  assert.equal(paymentNetworkMatchesDeployment("MainAlbatross", main), true);
+  assert.equal(paymentNetworkMatchesDeployment("main-albatross", main), true);
+  assert.equal(paymentNetworkMatchesDeployment("TestAlbatross", main), false);
+  assert.equal(paymentNetworkMatchesDeployment("test-albatross", main), false);
+  assert.equal(
+    paymentNetworkMatchesDeployment("MainAlbatross", { NEXT_PUBLIC_NIMNEAR_NIMIQ_NETWORK: "test-albatross" }),
+    false,
+  );
 });
 
 test("next.config force-inlines the canonical network without importing client env reads", async () => {

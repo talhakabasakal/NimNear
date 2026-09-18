@@ -50,6 +50,20 @@ traffic. Payments already fail closed when the verifier/RPC is unavailable.
 
 Operators must alert on `services.nimiq_rpc` independently of the HTTP status.
 
+`GET /health/payments` is payment readiness. It exposes only non-secret fields:
+`payment_configured`, canonical `network` (`MainAlbatross` or `TestAlbatross`),
+`rpc_configured`, `merchant_address_configured`, `websocket_enabled`, and the
+same service map as `/health/ready`. It never returns the merchant address
+value, RPC URL, credentials, tokens, cookies, JWTs, or private keys.
+
+- `200` + `status=ready` when payments are configured and RPC is healthy
+- `200` + `status=not_configured` when the payment trio is unset
+- `503` + `status=not_ready` when PostgreSQL/Redis are down, or payments are
+  configured but RPC is unhealthy
+
+Unlike `/health/ready`, this endpoint does fail when a configured RPC is
+unreachable, because it is specifically a payment smoke-test probe.
+
 Metrics (low-cardinality labels `method` and `outcome` only):
 
 - `nimnear_nimiq_rpc_requests_total`
